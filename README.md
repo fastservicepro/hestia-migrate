@@ -1,4 +1,5 @@
 # hestia-migrate
+<img width="1060" height="595" alt="hestia-migrate" src="https://github.com/user-attachments/assets/2deb8fd7-c635-48de-bef4-05b394757885" />
 
 **User import module for [Hestia Control Panel](https://hestiacp.com/)** — migrate accounts from one Hestia server to another without manual backup / scp / restore in a terminal.
 
@@ -6,6 +7,7 @@ Latest release: **Version 1.2.2**
 
 [GitHub](https://github.com/fastservicepro/hestia-migrate) · [Releases](https://github.com/fastservicepro/hestia-migrate/releases) · [Issues](https://github.com/fastservicepro/hestia-migrate/issues)
 
+Please go easy on this project — this is my first publicly shared code. I built it for myself because backing up and moving Hestia users only through the terminal was painfully inconvenient. The module is meant simply to make transferring users between your own Hestia servers easier. If it’s useful to anyone else, I’m glad. Contributions and improvements are very welcome.
 ---
 
 ## What it does
