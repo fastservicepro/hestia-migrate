@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# info: list hestia-migrate import jobs (history)
+# options: [LIMIT]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+limit=${1:-50}
+[[ "$limit" =~ ^[0-9]+$ ]] || limit=50
+
+jobs_root="$MIGRATE_DATA/jobs"
+printf '{"ok":true,"jobs":['
+first=1
+mapfile -t entries < <(find "$jobs_root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r | head -n "$limit")
+for id in "${entries[@]+"${entries[@]}"}"; do
+	[[ -n "$id" ]] || continue
+	[[ "$id" == bg-* ]] && continue
+	jdir="$jobs_root/$id"
+	[[ -d "$jdir" ]] || continue
+
+	user=
+	[[ -f "$jdir/user" ]] && user=$(cat "$jdir/user")
+	if [[ -z "$user" && "$id" =~ ^[0-9]{14}-(.+)$ ]]; then
+		user="${BASH_REMATCH[1]}"
+	fi
+
+	state=unknown
+	[[ -f "$jdir/state" ]] && state=$(cat "$jdir/state")
+	started=
+	[[ -f "$jdir/started" ]] && started=$(cat "$jdir/started")
+	session=
+	[[ -f "$jdir/session" ]] && session=$(cat "$jdir/session")
+	host=
+	if [[ -n "$session" && -f "$MIGRATE_DATA/sessions/$session/host" ]]; then
+		host=$(cat "$MIGRATE_DATA/sessions/$session/host")
+	fi
+
+	chunk=$(BACKUP_DIR="$BACKUP_DIR" python3 - "$jdir" "$id" "$user" "$state" "$started" "$session" "$host" <<'PY'
+import json, os, sys
+jdir, job_id, user, state, started, session, host = sys.argv[1:8]
+backup = os.environ.get("BACKUP_DIR", "/backup")
+pct, msg, result_ok = 0, "", None
+pj = os.path.join(jdir, "progress.json")
+if os.path.isfile(pj):
+    try:
+        d = json.load(open(pj, encoding="utf-8"))
+        pct = int(d.get("percent") or 0)
+        msg = d.get("message") or ""
+    except Exception:
+        pass
+rj = os.path.join(jdir, "result.json")
+if os.path.isfile(rj):
+    try:
+        d = json.load(open(rj, encoding="utf-8"))
+        result_ok = bool(d.get("ok"))
+    except Exception:
+        pass
+
+archive = ""
+la = os.path.join(jdir, "local_archive")
+ra = os.path.join(jdir, "remote_archive")
+if os.path.isfile(la):
+    archive = open(la, encoding="utf-8").read().strip()
+elif os.path.isfile(ra):
+    base = os.path.basename(open(ra, encoding="utf-8").read().strip())
+    if base:
+        archive = os.path.join(backup, base)
+
+archive_bytes = 0
+if archive and os.path.isfile(archive):
+    try:
+        archive_bytes = os.path.getsize(archive)
+    except OSError:
+        pass
+
+job_bytes = 0
+for root, _dirs, files in os.walk(jdir):
+    for name in files:
+        try:
+            job_bytes += os.path.getsize(os.path.join(root, name))
+        except OSError:
+            pass
+
+obj = {
+    "id": job_id,
+    "user": user,
+    "state": state,
+    "started": started,
+    "session": session,
+    "host": host,
+    "percent": pct,
+    "message": msg,
+    "archive": archive if archive_bytes else "",
+    "archive_bytes": archive_bytes,
+    "job_bytes": job_bytes,
+}
+if result_ok is not None:
+    obj["result_ok"] = result_ok
+print(json.dumps(obj, ensure_ascii=False), end="")
+PY
+)
+
+	if [[ "$first" -eq 0 ]]; then
+		printf ','
+	fi
+	first=0
+	printf '%s' "$chunk"
+done
+printf ']}\n'

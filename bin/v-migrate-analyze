@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# info: full pre-migration analysis for a remote user
+# options: SESSION USER
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+source /usr/local/hestia-migrate/lib/analyze.sh
+require_root
+
+session=${1-}
+user=${2-}
+[[ -n "$session" && -n "$user" ]] || die_json 2 "SESSION USER required"
+sdir=$(session_dir "$session")
+[[ -d "$sdir" ]] || die_json 2 "unknown session"
+
+# Ensure local snapshot fresh
+local_sys_json >"$sdir/local.json"
+
+# Push probe script and run remotely for user composition
+probe="$MIGRATE_ROOT/share/remote-user-probe.sh"
+remote_run "$session" "cat > /tmp/hestia-migrate-user-probe.sh && chmod 700 /tmp/hestia-migrate-user-probe.sh" <"$probe"
+user_json=$(remote_run "$session" "bash /tmp/hestia-migrate-user-probe.sh $(printf '%q' "$user")")
+echo "$user_json" >"$sdir/user-$user.json"
+if echo "$user_json" | grep -q '"error"'; then
+	die_json 4 "remote user probe failed: $user_json"
+fi
+
+remote_json=$(remote_run "$session" "bash -s" <"$MIGRATE_ROOT/share/remote-sys-probe.sh")
+echo "$remote_json" >"$sdir/remote.json"
+
+analyze_pair "$session" "$user" >"$sdir/analysis-$user.json"
+cat "$sdir/analysis-$user.json"

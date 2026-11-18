@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# info: start transfers for multiple users sequentially in background
+# options: SESSION ACCEPT_WARNINGS USER [USER...]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+session=${1-}
+accept=${2:-no}
+shift 2 || true
+[[ -n "$session" ]] || die_json 2 "SESSION required"
+[[ $# -ge 1 ]] || die_json 2 "at least one USER required"
+
+jobs_file=$(mktemp)
+{
+	echo "#!/bin/bash"
+	echo "set -e"
+	echo "SESSION=$(printf '%q' "$session")"
+	echo "ACCEPT=$(printf '%q' "$accept")"
+	for u in "$@"; do
+		echo "/usr/local/hestia/bin/v-migrate-start \"\$SESSION\" $(printf '%q' "$u") \"\$ACCEPT\" || true"
+		echo "sleep 2"
+	done
+} >"$jobs_file"
+chmod 700 "$jobs_file"
+nohup bash "$jobs_file" >"$MIGRATE_DATA/jobs/batch-$(date +%Y%m%d%H%M%S).log" 2>&1 &
+pid=$!
+
+# Wait briefly for first job
+first_job=""
+first_user=$1
+for _ in $(seq 1 40); do
+	sleep 0.25
+	cand=$(ls -1dt "$MIGRATE_DATA/jobs/"*-"$first_user" 2>/dev/null | head -n1 || true)
+	if [[ -n "$cand" && -d "$cand" ]]; then
+		first_job=$(basename "$cand")
+		break
+	fi
+done
+
+# Build jobs list as JSON array of expected names (actual ids appear as they start)
+users_json=$(printf '%s\n' "$@" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+printf '{"ok":true,"pid":%s,"first_job":"%s","users":%s,"message":"batch started"}\n' \
+	"$pid" "$first_job" "$users_json"

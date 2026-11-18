@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# info: delete migrate job history and related import archive(s)
+# options: JOB
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+job=${1-}
+[[ -n "$job" ]] || die_json 2 "JOB required"
+[[ "$job" =~ ^[A-Za-z0-9._-]+$ ]] || die_json 2 "invalid job id"
+
+jdir=$(job_dir "$job")
+[[ -d "$jdir" ]] || die_json 2 "unknown job"
+
+user=
+[[ -f "$jdir/user" ]] && user=$(cat "$jdir/user")
+if [[ -z "$user" && "$job" =~ ^[0-9]{14}-(.+)$ ]]; then
+	user="${BASH_REMATCH[1]}"
+fi
+
+freed=0
+removed=()
+
+delete_file() {
+	local f=$1
+	[[ -e "$f" ]] || return 0
+	local sz
+	sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
+	rm -rf "$f"
+	freed=$((freed + sz))
+	removed+=("$f")
+}
+
+# Prefer exact archive recorded by the transfer
+if [[ -f "$jdir/local_archive" ]]; then
+	delete_file "$(cat "$jdir/local_archive")"
+elif [[ -f "$jdir/remote_archive" ]]; then
+	base=$(basename "$(cat "$jdir/remote_archive")")
+	[[ -n "$base" ]] && delete_file "$BACKUP_DIR/$base"
+fi
+
+# Job workspace (templates.tar etc.)
+delete_file "$jdir"
+delete_file "$MIGRATE_DATA/jobs/bg-$job.log"
+
+# Orphan last-pid marker for this user (safe)
+if [[ -n "$user" ]]; then
+	delete_file "$MIGRATE_DATA/jobs/last-pid-$user"
+fi
+
+log_msg INFO "delete-job $job: freed ${freed} bytes; removed ${#removed[@]} paths"
+
+printf '{"ok":true,"job":"%s","user":"%s","freed_bytes":%s,"removed":[' \
+	"$(json_escape "$job")" \
+	"$(json_escape "$user")" \
+	"$freed"
+first=1
+for p in "${removed[@]+"${removed[@]}"}"; do
+	[[ -n "$p" ]] || continue
+	[[ "$first" -eq 1 ]] || printf ','
+	first=0
+	printf '"%s"' "$(json_escape "$p")"
+done
+printf ']}\n'

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# info: repair partial migration from local archive
+# options: JOB ACTION
+# ACTION: restore_db|restore_web|restore_mail|restore_dns|restore_cron|restore_udir|restore_all|fix_nginx|hold_le
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+job=${1-}
+action=${2-}
+[[ -n "$job" && -n "$action" ]] || die_json 2 "JOB ACTION required"
+jdir=$(job_dir "$job")
+[[ -d "$jdir" ]] || die_json 2 "unknown job"
+user=$(cat "$jdir/user")
+archive=$(cat "$jdir/remote_archive" 2>/dev/null || true)
+base=$(basename "${archive:-}")
+if [[ -z "$base" || ! -f "$BACKUP_DIR/$base" ]]; then
+	base=$(ls -1t "$BACKUP_DIR/$user".*.tar 2>/dev/null | head -n1 | xargs -n1 basename 2>/dev/null || true)
+fi
+[[ -n "$base" && -f "$BACKUP_DIR/$base" ]] || die_json 2 "local archive not found in /backup"
+
+export PATH=$PATH:/usr/local/hestia/bin
+log="$jdir/repair-$action.log"
+status_msg() { printf '{"ok":true,"job":"%s","action":"%s","message":"%s"}\n' "$job" "$action" "$(json_escape "$1")"; }
+
+case "$action" in
+restore_db)
+	v-restore-user "$user" "$base" no no no '*' no no no >"$log" 2>&1 || {
+		die_json 6 "restore_db failed: $(tail -n 5 "$log" | tr '\n' ' ')"
+	}
+	status_msg "Databases restored from $base"
+	;;
+restore_web)
+	v-restore-user "$user" "$base" '*' no no no no no no >"$log" 2>&1 || {
+		# nginx restart errors are common; continue if domain exists
+		if ! grep -q "DOMAIN=" "/usr/local/hestia/data/users/$user/web.conf" 2>/dev/null; then
+			die_json 6 "restore_web failed: $(tail -n 8 "$log" | tr '\n' ' ')"
+		fi
+	}
+	status_msg "Web domains restored from $base"
+	;;
+restore_mail)
+	v-restore-user "$user" "$base" no no '*' no no no no >"$log" 2>&1 || die_json 6 "restore_mail failed"
+	status_msg "Mail restored from $base"
+	;;
+restore_dns)
+	v-restore-user "$user" "$base" no '*' no no no no no >"$log" 2>&1 || die_json 6 "restore_dns failed"
+	status_msg "DNS restored from $base"
+	;;
+restore_cron)
+	v-restore-user "$user" "$base" no no no no '*' no no >"$log" 2>&1 || die_json 6 "restore_cron failed"
+	status_msg "Cron restored from $base"
+	;;
+restore_udir)
+	v-restore-user "$user" "$base" no no no no no '*' no >"$log" 2>&1 || die_json 6 "restore_udir failed"
+	status_msg "User files restored from $base"
+	;;
+restore_all)
+	v-restore-user "$user" "$base" '*' '*' '*' '*' '*' '*' no >"$log" 2>&1 || {
+		# tolerate nginx restart failure if user tree exists
+		if [[ ! -d /usr/local/hestia/data/users/$user ]]; then
+			die_json 6 "restore_all failed: $(tail -n 10 "$log" | tr '\n' ' ')"
+		fi
+	}
+	# hold LE
+	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/web.conf" 2>/dev/null || true
+	v-update-user-counters "$user" >/dev/null 2>&1 || true
+	status_msg "Full restore attempted from $base"
+	;;
+hold_le)
+	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/web.conf" 2>/dev/null || true
+	status_msg "Let's Encrypt held off until DNS switch"
+	;;
+fix_nginx)
+	# Ensure per-domain cache zone for domains using proxy_cache %domain%
+	mkdir -p /var/cache/nginx
+	POOL=/etc/nginx/conf.d/01_caching_pool.conf
+	touch "$POOL"
+	while IFS= read -r domain; do
+		[[ -z "$domain" ]] && continue
+		if ! grep -q "keys_zone=$domain:" "$POOL" 2>/dev/null; then
+			mkdir -p "/var/cache/nginx/$domain"
+			echo "proxy_cache_path /var/cache/nginx/$domain levels=1:2 use_temp_path=off keys_zone=$domain:10m inactive=60m max_size=256m;" >>"$POOL"
+		fi
+	done < <(grep -oE "DOMAIN='[^']+'" "/usr/local/hestia/data/users/$user/web.conf" 2>/dev/null | cut -d"'" -f2)
+
+	# Custom per-domain nginx snippets from the source may reference map/geo
+	# variables that do not exist on this server. Disable snippets one-by-one
+	# until nginx -t succeeds (generic; no site-specific names).
+	confdir="/home/$user/conf/web"
+	if [[ -d "$confdir" ]] && ! nginx -t >/dev/null 2>&1; then
+		mapfile -t snippets < <(find "$confdir" -type f \( -name 'nginx.conf_*' -o -name 'nginx.ssl.conf_*' \) ! -name '*.disabled-by-migrate' 2>/dev/null | sort)
+		for f in "${snippets[@]+"${snippets[@]}"}"; do
+			[[ -f "$f" ]] || continue
+			mv -f "$f" "${f}.disabled-by-migrate" 2>/dev/null || true
+			if nginx -t >/dev/null 2>&1; then
+				break
+			fi
+		done
+	fi
+
+	if ! nginx -t >"$log" 2>&1; then
+		die_json 6 "nginx -t failed: $(tail -n 8 "$log" | tr '\n' ' ')"
+	fi
+	systemctl reload nginx
+	systemctl reload apache2 2>/dev/null || true
+	status_msg "Nginx repaired and reloaded"
+	;;
+*)
+	die_json 2 "unknown action"
+	;;
+esac
+
+# refresh job state marker
+echo "repaired:$action" >"$jdir/state"
+date -Is >"$jdir/repaired_at"

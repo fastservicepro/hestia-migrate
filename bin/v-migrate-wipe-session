@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# info: remove temporary SSH key from remote + shred local session keys
+# options: SESSION
+#
+# Always shreds local private/public keys. Best-effort removes the matching
+# authorized_keys line on the remote host (comment: hestia-migrate-SESSION).
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+session=${1-}
+[[ -n "$session" ]] || die_json 2 "SESSION required"
+
+sdir=$(session_dir "$session")
+[[ -d "$sdir" ]] || die_json 2 "unknown session"
+
+already_remote=false
+if [[ -f "$sdir/wiped" ]]; then
+	[[ -f "$sdir/remote_key_removed" && "$(cat "$sdir/remote_key_removed")" == "1" ]] && already_remote=true
+	printf '{"ok":true,"session":"%s","already_wiped":true,"remote_key_removed":%s}\n' \
+		"$(json_escape "$session")" "$already_remote"
+	exit 0
+fi
+
+key="$sdir/id_ed25519"
+pub="$key.pub"
+host=
+port=22
+ssh_user=root
+[[ -f "$sdir/host" ]] && host=$(cat "$sdir/host")
+[[ -f "$sdir/port" ]] && port=$(cat "$sdir/port")
+[[ -f "$sdir/ssh_user" ]] && ssh_user=$(cat "$sdir/ssh_user")
+
+remote_removed=false
+remote_error=
+marker="hestia-migrate-$session"
+
+if [[ -n "$host" && -f "$key" ]]; then
+	# Remote script: strip our key comment from user + root authorized_keys
+	remote_rc=1
+	if [[ "$ssh_user" == "root" ]]; then
+		ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
+			-o StrictHostKeyChecking=accept-new -p "$port" "root@${host}" \
+			"grep -vF $(printf '%q' "$marker") /root/.ssh/authorized_keys > /root/.ssh/authorized_keys.hmig-tmp 2>/dev/null; \
+			 mv /root/.ssh/authorized_keys.hmig-tmp /root/.ssh/authorized_keys 2>/dev/null; \
+			 chmod 600 /root/.ssh/authorized_keys 2>/dev/null; true" >/dev/null 2>&1 && remote_rc=0
+	else
+		ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
+			-o StrictHostKeyChecking=accept-new -p "$port" "${ssh_user}@${host}" \
+			"AUTH=\"\$HOME/.ssh/authorized_keys\"; \
+			 if [ -f \"\$AUTH\" ]; then grep -vF $(printf '%q' "$marker") \"\$AUTH\" > \"\$AUTH.hmig-tmp\" && mv \"\$AUTH.hmig-tmp\" \"\$AUTH\" && chmod 600 \"\$AUTH\"; fi; \
+			 sudo -n bash -c \"grep -vF $(printf '%q' "$marker") /root/.ssh/authorized_keys > /root/.ssh/authorized_keys.hmig-tmp && mv /root/.ssh/authorized_keys.hmig-tmp /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys\" 2>/dev/null; \
+			 true" >/dev/null 2>&1 && remote_rc=0
+	fi
+	if [[ "$remote_rc" -eq 0 ]]; then
+		remote_removed=true
+	else
+		remote_error="could not reach remote or remove authorized_keys line (local keys still shredded)"
+		log_msg WARN "wipe-session $session: remote key removal failed"
+	fi
+fi
+
+for f in "$key" "$pub" "$sdir/.pw" "$sdir/askpass.sh"; do
+	if [[ -f "$f" ]]; then
+		shred -u "$f" 2>/dev/null || rm -f "$f"
+	fi
+done
+find "$sdir" -maxdepth 1 -type f \( -name 'id_*' -o -name '*.pub' -o -name '.pw*' \) \
+	-exec shred -u {} \; 2>/dev/null || true
+
+date -Is >"$sdir/wiped"
+echo "1" >"$sdir/keys_removed"
+if [[ "$remote_removed" == true ]]; then
+	echo "1" >"$sdir/remote_key_removed"
+else
+	echo "0" >"$sdir/remote_key_removed"
+fi
+
+log_msg INFO "wipe-session $session: local keys shredded; remote_removed=$remote_removed"
+
+printf '{"ok":true,"session":"%s","remote_key_removed":%s' \
+	"$(json_escape "$session")" \
+	"$remote_removed"
+if [[ -n "$remote_error" ]]; then
+	printf ',"warning":"%s"' "$(json_escape "$remote_error")"
+fi
+printf '}\n'

@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# info: inspect a migration job — what exists vs what the archive still contains
+# options: JOB
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+job=${1-}
+[[ -n "$job" ]] || die_json 2 "JOB required"
+jdir=$(job_dir "$job")
+[[ -d "$jdir" ]] || die_json 2 "unknown job"
+
+user=$(cat "$jdir/user" 2>/dev/null || true)
+[[ -n "$user" ]] || die_json 2 "job has no user"
+
+archive=$(cat "$jdir/remote_archive" 2>/dev/null || true)
+base=$(basename "${archive:-}")
+local_archive=""
+if [[ -n "$base" && -f "$BACKUP_DIR/$base" ]]; then
+	local_archive="$BACKUP_DIR/$base"
+else
+	# newest matching archive
+	local_archive=$(ls -1t "$BACKUP_DIR/$user".*.tar 2>/dev/null | head -n1 || true)
+	base=$(basename "${local_archive:-}")
+fi
+
+python3 - "$user" "$jdir" "${local_archive:-}" "${base:-}" <<'PY'
+import json, os, re, subprocess, sys, tarfile
+
+user, jdir, archive, base = sys.argv[1:5]
+ud = f"/usr/local/hestia/data/users/{user}"
+home = f"/home/{user}"
+
+def exists_user():
+    return os.path.isdir(ud)
+
+def count_lines(path, prefix=None):
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return 0
+    n = 0
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if prefix and not line.startswith(prefix):
+                continue
+            if line.strip():
+                n += 1
+    return n
+
+def db_live_count():
+    conf = f"{ud}/db.conf"
+    if not os.path.isfile(conf) or os.path.getsize(conf) == 0:
+        return 0
+    names = []
+    for line in open(conf, encoding="utf-8", errors="replace"):
+        m = re.search(r"DB='([^']+)'", line)
+        if m:
+            names.append(m.group(1))
+    ok = 0
+    for name in names:
+        try:
+            out = subprocess.check_output(
+                ["mariadb", "-N", "-e", f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='{name}'"],
+                text=True, stderr=subprocess.DEVNULL, timeout=30,
+            ).strip()
+            if int(out or 0) > 0:
+                ok += 1
+        except Exception:
+            pass
+    return ok, len(names)
+
+web_n = count_lines(f"{ud}/web.conf", "DOMAIN=")
+mail_n = count_lines(f"{ud}/mail.conf", "DOMAIN=") if os.path.isfile(f"{ud}/mail.conf") else 0
+dns_n = count_lines(f"{ud}/dns.conf", "DOMAIN=") if os.path.isfile(f"{ud}/dns.conf") else 0
+cron_n = count_lines(f"{ud}/cron.conf") if os.path.isfile(f"{ud}/cron.conf") else 0
+db_ok, db_conf_n = (0, 0)
+if exists_user():
+    try:
+        db_ok, db_conf_n = db_live_count()
+    except Exception:
+        db_conf_n = count_lines(f"{ud}/db.conf", "DB=")
+
+home_mb = 0
+if os.path.isdir(home):
+    try:
+        home_mb = int(subprocess.check_output(["du", "-sm", home], text=True).split()[0])
+    except Exception:
+        pass
+
+# Archive inventory
+arch = {"present": bool(archive and os.path.isfile(archive)), "path": archive or "", "name": base or "",
+        "web": 0, "db": 0, "mail": 0, "dns": 0, "cron": False, "udir": False}
+if arch["present"]:
+    try:
+        with tarfile.open(archive, "r:") as tar:
+            names = tar.getnames()
+        arch["web"] = len({n.split("/")[2] for n in names if n.startswith("./web/") and len(n.split("/")) > 2})
+        arch["db"] = len({n.split("/")[2] for n in names if n.startswith("./db/") and len(n.split("/")) > 2})
+        arch["mail"] = len({n.split("/")[2] for n in names if n.startswith("./mail/") and len(n.split("/")) > 2})
+        arch["dns"] = len({n.split("/")[2] for n in names if n.startswith("./dns/") and len(n.split("/")) > 2})
+        arch["cron"] = any(n.startswith("./cron/") for n in names)
+        arch["udir"] = any(n.startswith("./user_dir/") for n in names)
+    except Exception as e:
+        arch["error"] = str(e)
+
+missing = []
+actions = []
+
+def need(key, title, action, detail):
+    missing.append({"key": key, "title": title, "detail": detail})
+    actions.append({"id": action, "label": title, "key": key})
+
+if not exists_user():
+    need("user", "User account missing", "restore_all", "Run full restore from archive")
+else:
+    if arch["present"] and arch["web"] and web_n == 0:
+        need("web", "Web domains not restored", "restore_web", f"Archive has {arch['web']} web domain(s)")
+    if arch["present"] and arch["db"] and db_ok < arch["db"]:
+        need("db", "Database(s) incomplete", "restore_db",
+             f"Live OK {db_ok}/{arch['db']} in archive (db.conf entries={db_conf_n})")
+    if arch["present"] and arch["mail"] and mail_n == 0:
+        need("mail", "Mail not restored", "restore_mail", f"Archive has {arch['mail']} mail domain(s)")
+    if arch["present"] and arch["dns"] and dns_n == 0:
+        need("dns", "DNS zones not restored", "restore_dns", f"Archive has {arch['dns']} zone(s)")
+    if arch["present"] and arch["cron"] and cron_n == 0:
+        need("cron", "Cron jobs not restored", "restore_cron", "Archive contains cron")
+    if arch["present"] and arch["udir"] and home_mb < 5 and web_n == 0:
+        need("udir", "Home extra files missing", "restore_udir", "Archive contains user_dir")
+
+# nginx sanity for this user's domains
+nginx_ok = True
+nginx_detail = ""
+try:
+    p = subprocess.run(["nginx", "-t"], capture_output=True, text=True, timeout=20)
+    if p.returncode != 0:
+        nginx_ok = False
+        nginx_detail = (p.stderr or p.stdout or "")[-300:]
+        need("nginx", "Nginx config broken", "fix_nginx", nginx_detail)
+except Exception as e:
+    nginx_ok = False
+    need("nginx", "Nginx check failed", "fix_nginx", str(e))
+
+state = open(f"{jdir}/state").read().strip() if os.path.isfile(f"{jdir}/state") else "unknown"
+progress = {}
+if os.path.isfile(f"{jdir}/progress.json"):
+    try:
+        progress = json.load(open(f"{jdir}/progress.json", encoding="utf-8"))
+    except Exception:
+        pass
+
+out = {
+    "ok": True,
+    "job": os.path.basename(jdir),
+    "user": user,
+    "state": state,
+    "progress": progress,
+    "local": {
+        "user_exists": exists_user(),
+        "web": web_n,
+        "db_ok": db_ok,
+        "db_conf": db_conf_n,
+        "mail": mail_n,
+        "dns": dns_n,
+        "cron": cron_n,
+        "home_mb": home_mb,
+        "nginx_ok": nginx_ok,
+        "nginx_detail": nginx_detail,
+    },
+    "archive": arch,
+    "missing": missing,
+    "actions": actions,
+    "can_repair": bool(arch["present"]) and len(actions) > 0,
+}
+print(json.dumps(out, ensure_ascii=False))
+PY

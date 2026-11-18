@@ -1,0 +1,14 @@
+# hestia-migrate — allow panel user to run migration CLI only
+Defaults:hestiaweb !requiretty
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-connect
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-list-users
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-analyze
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-start
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-start-batch
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-status
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-verify
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-inspect-job
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-repair
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-list-jobs
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-wipe-session
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-delete-job

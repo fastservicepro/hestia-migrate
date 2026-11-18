@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# info: show migration job status
+# options: JOB
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+job=${1-}
+[[ -n "$job" ]] || die_json 2 "JOB required"
+jdir=$(job_dir "$job")
+[[ -d "$jdir" ]] || die_json 2 "unknown job"
+
+python3 - "$jdir" "$job" <<'PY'
+import json, os, sys
+jdir, job = sys.argv[1], sys.argv[2]
+out = {"ok": True, "job": job}
+for name in ("state",):
+    p = os.path.join(jdir, name)
+    if os.path.isfile(p):
+        out["state"] = open(p).read().strip()
+for name in ("progress.json", "result.json", "dns-checklist.json"):
+    p = os.path.join(jdir, name)
+    if os.path.isfile(p):
+        key = name.replace(".json", "").replace("-", "_")
+        try:
+            out[key] = json.load(open(p, encoding="utf-8"))
+        except Exception as e:
+            out[key] = {"error": str(e)}
+print(json.dumps(out, ensure_ascii=False))
+PY

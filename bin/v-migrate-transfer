@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# info: transfer remote Hestia user to this server
+# options: SESSION USER [ACCEPT_WARNINGS=yes]
+#
+# Requires a prior successful analysis. Streams official v-backup-user archive
+# to local /backup, copies missing packages/templates, runs v-restore-user,
+# disables LE renewal until DNS confirmed, removes temp archives.
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+session=${1-}
+user=${2-}
+accept=${3:-no}
+
+[[ -n "$session" && -n "$user" ]] || die_json 2 "SESSION USER required"
+sdir=$(session_dir "$session")
+[[ -d "$sdir" ]] || die_json 2 "unknown session"
+
+analysis="$sdir/analysis-$user.json"
+[[ -f "$analysis" ]] || die_json 2 "run v-migrate-analyze first"
+
+verdict=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$analysis")
+if [[ "$verdict" == "blocked" ]]; then
+	die_json 5 "analysis blocked migration"
+fi
+if [[ "$verdict" == "warn" && "$accept" != "yes" ]]; then
+	die_json 5 "analysis has warnings; pass ACCEPT_WARNINGS=yes"
+fi
+
+# Conflict re-check
+if [[ -d "/usr/local/hestia/data/users/$user" ]]; then
+	die_json 5 "user already exists"
+fi
+
+job=$(date +%Y%m%d%H%M%S)-$user
+jdir=$(job_dir "$job")
+mkdir -p "$jdir"
+chmod 700 "$jdir"
+cp -a "$analysis" "$jdir/analysis.json"
+echo "$session" >"$jdir/session"
+echo "$user" >"$jdir/user"
+echo "queued" >"$jdir/state"
+date -Is >"$jdir/started"
+
+status() {
+	local stage=$1
+	local pct=$2
+	local msg=$3
+	printf '{"stage":"%s","percent":%s,"message":"%s","updated":"%s"}\n' \
+		"$stage" "$pct" "$(json_escape "$msg")" "$(date -Is)" >"$jdir/progress.json"
+	echo "$stage" >"$jdir/state"
+	log_msg INFO "[$job] $stage: $msg"
+}
+
+fail_job() {
+	local msg=$1
+	status "failed" 0 "$msg"
+	printf '{"ok":false,"job":"%s","error":"%s"}\n' "$job" "$(json_escape "$msg")" >"$jdir/result.json"
+	echo "failed" >"$jdir/state"
+	die_json 6 "$msg"
+}
+
+# Background-friendly: if MIGRATE_BG=1, daemonize after printing job id
+if [[ "${MIGRATE_BG:-0}" == "1" ]]; then
+	printf '{"ok":true,"job":"%s","status":"started"}\n' "$job"
+	# continue in same process when called from nohup wrapper
+fi
+
+status "prepare" 5 "Copying missing package and templates from source"
+
+# Copy package
+pkg=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["composition"].get("package",""))' "$analysis")
+if [[ -n "$pkg" && ! -f "/usr/local/hestia/data/packages/$pkg.pkg" ]]; then
+	remote_run "$session" "cat /usr/local/hestia/data/packages/$pkg.pkg" \
+		>"/usr/local/hestia/data/packages/$pkg.pkg" || true
+	remote_run "$session" "cat /usr/local/hestia/data/packages/$pkg.sh" \
+		>"/usr/local/hestia/data/packages/$pkg.sh" 2>/dev/null || true
+fi
+
+# Copy templates referenced by sites
+python3 - "$analysis" "$sdir" <<'PY' >"$jdir/templates-needed.txt"
+import json, sys
+a = json.load(open(sys.argv[1]))
+comp = a.get("composition") or {}
+for key in ("templates", "backends", "proxies"):
+    for x in filter(None, (comp.get(key) or "").split(",")):
+        print(x)
+PY
+
+# Fetch template tree for used names via tar stream from remote
+status "templates" 10 "Fetching web templates"
+remote_run "$session" 'bash -s' <<'REMOTE' >"$jdir/templates.tar" || true
+set -e
+cd /usr/local/hestia/data/templates
+tar -cf - web packages 2>/dev/null || tar -cf - web
+REMOTE
+if [[ -s "$jdir/templates.tar" ]]; then
+	mkdir -p "$jdir/templates-extract"
+	tar -xf "$jdir/templates.tar" -C "$jdir/templates-extract" 2>/dev/null || true
+	# Only install missing custom templates (do not overwrite stock)
+	find "$jdir/templates-extract" -type f \( -name '*.tpl' -o -name '*.stpl' -o -name '*.pkg' -o -name '*.sh' \) | while read -r f; do
+		rel=${f#"$jdir/templates-extract/"}
+		dest="/usr/local/hestia/data/templates/$rel"
+		# packages path adjustment
+		if [[ "$rel" == packages/* ]]; then
+			dest="/usr/local/hestia/data/$rel"
+		fi
+		if [[ ! -f "$dest" ]]; then
+			mkdir -p "$(dirname "$dest")"
+			cp -a "$f" "$dest"
+		fi
+	done
+fi
+
+status "backup" 20 "Creating user archive on source (official v-backup-user)"
+# Run backup remotely; capture the new archive name
+remote_archive=$(remote_run "$session" "bash -s" <<REMOTE
+set -e
+export PATH=\$PATH:/usr/local/hestia/bin
+/usr/local/hestia/bin/v-backup-user $(printf '%q' "$user") no >/tmp/hestia-migrate-backup.log 2>&1 || {
+  cat /tmp/hestia-migrate-backup.log >&2
+  exit 1
+}
+# newest archive for user
+ls -1t /backup/${user}.*.tar 2>/dev/null | head -n1
+REMOTE
+) || fail_job "remote v-backup-user failed"
+
+[[ -n "$remote_archive" ]] || fail_job "no archive produced on source"
+echo "$remote_archive" >"$jdir/remote_archive"
+base=$(basename "$remote_archive")
+local_archive="$BACKUP_DIR/$base"
+mkdir -p "$BACKUP_DIR"
+
+status "transfer" 40 "Streaming archive to destination"
+# shellcheck disable=SC2046
+remote_run "$session" "cat $(printf '%q' "$remote_archive")" >"$local_archive" || fail_job "archive transfer failed"
+chmod 640 "$local_archive"
+chown root:root "$local_archive"
+echo "$local_archive" >"$jdir/local_archive"
+# Keep a copy of the archive until job is deleted from History (failed jobs need Repair).
+# Successful runs still remove it below after restore; failed jobs leave it for repair / manual delete.
+
+# Remove remote archive to free source disk
+status "cleanup_source" 55 "Removing temporary archive on source"
+remote_run "$session" "rm -f $(printf '%q' "$remote_archive")" || true
+
+status "restore" 60 "Restoring user with v-restore-user"
+export PATH=$PATH:/usr/local/hestia/bin
+if ! /usr/local/hestia/bin/v-restore-user "$user" "$base" '*' '*' '*' '*' '*' '*' no \
+	>"$jdir/restore.log" 2>&1; then
+	fail_job "v-restore-user failed; see job restore.log"
+fi
+
+status "post" 85 "Post-restore fixes (LE hold, counters)"
+# Hold Let's Encrypt renewals until DNS confirmed
+if [[ -f "/usr/local/hestia/data/users/$user/web.conf" ]]; then
+	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/web.conf" || true
+fi
+if [[ -f "/usr/local/hestia/data/users/$user/mail.conf" ]]; then
+	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/mail.conf" || true
+fi
+/usr/local/hestia/bin/v-update-user-counters "$user" >/dev/null 2>&1 || true
+/usr/local/hestia/bin/v-rebuild-user "$user" yes >/dev/null 2>&1 || true
+
+# DNS checklist + local IP probe list
+python3 - "$user" "$jdir" <<'PY'
+import json, os, re, subprocess, sys
+user, jdir = sys.argv[1], sys.argv[2]
+ud = f"/usr/local/hestia/data/users/{user}"
+# destination IPs
+ips = []
+try:
+    out = subprocess.check_output(["/usr/local/hestia/bin/v-list-sys-ips", "json"], text=True)
+    data = json.loads(out)
+    ips = list(data.keys())
+except Exception:
+    pass
+primary = ips[0] if ips else ""
+domains = []
+wc = f"{ud}/web.conf"
+if os.path.isfile(wc):
+    for line in open(wc, encoding="utf-8", errors="replace"):
+        m = re.search(r"DOMAIN='([^']+)'", line)
+        if m:
+            aliases = []
+            am = re.search(r"ALIAS='([^']*)'", line)
+            if am and am.group(1):
+                aliases = [a for a in am.group(1).split(",") if a]
+            domains.append({"domain": m.group(1), "aliases": aliases})
+checklist = {
+    "destination_ips": ips,
+    "primary_ip": primary,
+    "records": [
+        {"type": "A", "name": d["domain"], "value": primary} for d in domains
+    ] + [
+        {"type": "A", "name": a, "value": primary}
+        for d in domains for a in d["aliases"]
+    ],
+    "domains": domains,
+    "note": "Change these records at your registrar after local verify. Then click DNS switched.",
+}
+json.dump(checklist, open(f"{jdir}/dns-checklist.json", "w"), indent=2)
+json.dump(domains, open(f"{jdir}/domains.json", "w"))
+PY
+
+status "cleanup_local" 95 "Removing local temporary archive"
+rm -f "$local_archive"
+rm -f "$jdir/local_archive"
+
+status "done" 100 "User imported"
+printf '{"ok":true,"job":"%s","user":"%s","dns_checklist":"/usr/local/hestia/data/hestia-migrate/jobs/%s/dns-checklist.json"}\n' \
+	"$job" "$user" "$job" | tee "$jdir/result.json"
+echo "done" >"$jdir/state"

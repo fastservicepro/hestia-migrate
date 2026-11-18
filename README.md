@@ -1,0 +1,204 @@
+# hestia-migrate
+
+**User import module for [Hestia Control Panel](https://hestiacp.com/)** — migrate accounts from one Hestia server to another without manual backup / scp / restore in a terminal.
+
+Latest release: **Version 1.2.2**
+
+[GitHub](https://github.com/fastservicepro/hestia-migrate) · [Releases](https://github.com/fastservicepro/hestia-migrate/releases) · [Issues](https://github.com/fastservicepro/hestia-migrate/issues)
+
+---
+
+## What it does
+
+From the **destination** panel an administrator:
+
+1. Connects to a **source** Hestia server over SSH (password used once, not stored)
+2. Selects one or more Hestia users
+3. Reviews a full compatibility analysis (OS, Hestia, PHP, database, disk, conflicts)
+4. Imports web, mail, DNS, databases, cron and home files via official `v-backup-user` / `v-restore-user`
+5. Verifies sites on the new IP, then switches DNS and optionally issues Let's Encrypt
+
+Temporary SSH keys are wiped after import or when you disconnect. Job history can be deleted together with leftover archives under `/backup`.
+
+---
+
+## Requirements
+
+### Destination server (where you install the module)
+
+- Hestia Control Panel already installed
+- Debian 12 / 13 or Ubuntu 22.04 / 24.04 / 26.04
+- `python3`, `ssh`, `git` (installer can pull `sshpass` / `rsync` if missing)
+- Root access
+
+### Source server (the old panel you import from)
+
+- Hestia Control Panel
+- SSH as `root`, or a user with **passwordless sudo**
+- Outbound SSH from destination → source must be allowed
+
+**Notes**
+
+- Install on the **new** server (destination), not on the source.
+- Source accounts stay online until you change DNS at the registrar.
+
+---
+
+## Installing hestia-migrate
+
+### Step 1: Log in as root
+
+```bash
+ssh root@your.destination.server
+```
+
+### Step 2: One-line install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/install-remote.sh | bash
+```
+
+If `curl` fails with an SSL error:
+
+```bash
+apt-get update && apt-get install -y ca-certificates curl
+```
+
+### Step 3: Open the panel
+
+- **Users → Import user**, or open `/migrate/`
+- Enable / disable the module under **Settings → Configure → Plugins → User Import (Hestia↔Hestia)** (Yes / No)
+
+---
+
+## Alternative install methods
+
+### Clone with git
+
+```bash
+cd /usr/local/src
+git clone https://github.com/fastservicepro/hestia-migrate.git
+cd hestia-migrate
+bash install.sh
+```
+
+### Install from a release zip
+
+```bash
+cd /usr/local/src
+wget https://github.com/fastservicepro/hestia-migrate/releases/latest/download/hestia-migrate-1.2.2.zip
+unzip hestia-migrate-1.2.2.zip -d hestia-migrate
+cd hestia-migrate
+bash install.sh
+```
+
+### Optional dependency
+
+```bash
+apt-get install -y sshpass
+```
+
+`sshpass` makes the first SSH password login more reliable. Without it the module still tries an askpass fallback.
+
+---
+
+## How to upgrade
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/install-remote.sh | bash
+```
+
+Or:
+
+```bash
+cd /usr/local/src/hestia-migrate
+git pull
+bash install.sh
+```
+
+`install.sh` is idempotent: it refreshes files, sudoers, the Users button, and the Plugins Yes/No control. After a Hestia package upgrade, `/etc/hestiacp/hooks/post_install.sh` re-applies the UI patches automatically.
+
+---
+
+## Uninstall
+
+```bash
+bash /usr/local/hestia-migrate/uninstall.sh
+```
+
+Purge job / session data as well:
+
+```bash
+bash /usr/local/hestia-migrate/uninstall.sh --purge
+```
+
+Uninstall wipes any remaining temporary SSH keys first.
+
+---
+
+## Using the wizard
+
+1. **Server** — hostname/IP, SSH port, login, password  
+2. **Users** — multi-select accounts on the source  
+3. **Analysis** — verdict `ok` / `warn` / `blocked`  
+4. **Transfer** — backup → stream → restore; LE held until DNS is ready  
+5. **Repair** — finish partial imports from the local archive  
+6. **DNS** — probe domains on the new IP; checklist for registrar A records  
+7. **History** — list past jobs; **Delete** removes history + leftover `/backup` archive (does **not** delete the Hestia user)
+
+---
+
+## CLI
+
+```bash
+v-migrate-connect HOST [PORT] PASSWORD_FILE [SSH_USER]
+v-migrate-list-users SESSION
+v-migrate-analyze SESSION USER
+v-migrate-start SESSION USER [yes]
+v-migrate-start-batch SESSION yes|no USER [USER…]
+v-migrate-status JOB
+v-migrate-list-jobs [LIMIT]
+v-migrate-inspect-job JOB
+v-migrate-repair JOB ACTION
+v-migrate-verify JOB [yes]
+v-migrate-wipe-session SESSION
+v-migrate-delete-job JOB
+```
+
+---
+
+## Layout on disk
+
+| Path | Role |
+|------|------|
+| `/usr/local/hestia-migrate` | Module root |
+| `/usr/local/hestia/bin/v-migrate-*` | CLI symlinks |
+| `/usr/local/hestia/web/migrate/` | Panel UI |
+| `/usr/local/hestia/data/hestia-migrate/` | Sessions & jobs (local only) |
+| `/etc/hestiacp/hooks/post_install.sh` | Re-applies UI after Hestia upgrades |
+
+---
+
+## Privacy & security
+
+- **No telemetry**, analytics, or phone-home.
+- Network use is only what you start: SSH to the source host **you enter**, plus local HTTP probes to **this server’s IP** during verify.
+- Passwords are shredded after the temporary key is installed; session keys are wiped after import / disconnect.
+- Job history never stores passwords or private keys.
+
+---
+
+## Issues & support
+
+- Bugs and feature requests: [GitHub Issues](https://github.com/fastservicepro/hestia-migrate/issues)
+- Please include destination OS, Hestia version, and whether the failure happened at connect / analyze / transfer / restore.
+
+This is a **third-party module**, not part of the official HestiaCP distribution. For general Hestia help use the [Hestia forum](https://forum.hestiacp.com/).
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Hestia Control Panel is a separate project (GPL-3.0). This module is not affiliated with or endorsed by hestiacp.com; “Hestia” / “HestiaCP” names refer to compatibility with that panel.

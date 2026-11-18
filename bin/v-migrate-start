@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# info: start user transfer in background and print job id hint
+# options: SESSION USER [ACCEPT_WARNINGS]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+session=${1-}
+user=${2-}
+accept=${3:-no}
+[[ -n "$session" && -n "$user" ]] || die_json 2 "SESSION USER required"
+
+mkdir -p "$MIGRATE_DATA/jobs"
+log="$MIGRATE_DATA/jobs/bg-$(date +%Y%m%d%H%M%S)-${user}.log"
+# Pre-create a marker so the panel can find the job quickly after transfer creates it
+nohup /usr/local/hestia-migrate/bin/v-migrate-transfer "$session" "$user" "$accept" >"$log" 2>&1 &
+pid=$!
+echo "$pid" >"$MIGRATE_DATA/jobs/last-pid-$user"
+
+# Wait until job directory appears (transfer creates it at start)
+job=""
+for _ in $(seq 1 60); do
+	sleep 0.25
+	# newest job dir matching *-user
+	cand=$(ls -1dt "$MIGRATE_DATA/jobs/"*-"$user" 2>/dev/null | head -n1 || true)
+	if [[ -n "$cand" && -d "$cand" ]]; then
+		job=$(basename "$cand")
+		break
+	fi
+	if ! kill -0 "$pid" 2>/dev/null; then
+		# process exited before creating job — show log
+		die_json 6 "transfer exited early: $(tail -n 20 "$log" | tr '\n' ' ')"
+	fi
+done
+
+[[ -n "$job" ]] || die_json 6 "job not created; see $log"
+printf '{"ok":true,"job":"%s","pid":%s,"log":"%s"}\n' "$job" "$pid" "$(json_escape "$log")"

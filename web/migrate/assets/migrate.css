@@ -1,0 +1,203 @@
+.hmig-wrap {
+	max-width: 1100px;
+	margin: 0 auto;
+	padding: 0 0 2rem;
+}
+.hmig-steps {
+	display: flex;
+	gap: 0.45rem;
+	list-style: none;
+	padding: 0;
+	margin: 0 0 1.5rem;
+	flex-wrap: wrap;
+}
+.hmig-steps li {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.45rem 0.85rem;
+	border-radius: 999px;
+	border: 1px solid var(--border-color-primary, rgba(127, 127, 127, 0.4));
+	background: var(--color-background-secondary, rgba(127, 127, 127, 0.12));
+	color: var(--color-text, inherit);
+	font-size: 0.85rem;
+	opacity: 1;
+	cursor: pointer;
+	-webkit-font-smoothing: antialiased;
+}
+.hmig-steps li i {
+	opacity: 0.95;
+}
+.hmig-steps li.is-active {
+	background: var(--color-accent-primary, #7c3aed);
+	border-color: transparent;
+	color: #fff;
+}
+.hmig-steps li.is-done {
+	background: #166534;
+	border-color: transparent;
+	color: #fff;
+}
+.hmig-panel {
+	display: none;
+	background: var(--color-background, transparent);
+	border: 1px solid var(--border-color-primary, rgba(127, 127, 127, 0.35));
+	border-radius: 8px;
+	padding: 1.25rem 1.5rem;
+}
+.hmig-panel.is-active {
+	display: block;
+}
+.hmig-panel h1 i,
+.hmig-panel h3 i,
+.form-label i {
+	margin-right: 0.35rem;
+}
+.hmig-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1rem;
+}
+@media (max-width: 800px) {
+	.hmig-grid {
+		grid-template-columns: 1fr;
+	}
+}
+.hmig-box {
+	background: rgba(15, 23, 42, 0.35);
+	border-radius: 6px;
+	padding: 0.75rem 1rem;
+	overflow: auto;
+	font-size: 0.85rem;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.hmig-log {
+	margin-top: 1rem;
+	max-height: 240px;
+	overflow: auto;
+	background: #111827;
+	color: #e5e7eb;
+	padding: 0.75rem;
+	border-radius: 6px;
+	font-size: 0.8rem;
+}
+.hmig-verdict {
+	font-weight: 700;
+	padding: 0.75rem 1rem;
+	border-radius: 6px;
+	margin-bottom: 1rem;
+}
+.hmig-verdict.ok {
+	background: #dcfce7;
+	color: #166534;
+}
+.hmig-verdict.warn {
+	background: #fef3c7;
+	color: #92400e;
+}
+.hmig-verdict.blocked {
+	background: #fee2e2;
+	color: #991b1b;
+}
+body.dark .hmig-verdict.ok,
+.dark .hmig-verdict.ok {
+	background: rgba(22, 163, 74, 0.28);
+	color: #bbf7d0;
+}
+body.dark .hmig-verdict.warn,
+.dark .hmig-verdict.warn {
+	background: rgba(202, 138, 4, 0.28);
+	color: #fde68a;
+}
+body.dark .hmig-verdict.blocked,
+.dark .hmig-verdict.blocked {
+	background: rgba(185, 28, 28, 0.35);
+	color: #fecaca;
+}
+.hmig-list {
+	margin: 0.25rem 0 1rem;
+	padding-left: 1.25rem;
+}
+.hmig-progress {
+	height: 12px;
+	background: rgba(127, 127, 127, 0.25);
+	border-radius: 999px;
+	overflow: hidden;
+}
+.hmig-progress-bar {
+	height: 100%;
+	background: linear-gradient(90deg, #7c3aed, #2563eb);
+	transition: width 0.3s ease;
+}
+#hmig-connect-form .button {
+	margin-right: 0.5rem;
+	margin-top: 0.25rem;
+}
+.hmig-card {
+	border: 1px solid var(--border-color-primary, rgba(127, 127, 127, 0.35));
+	border-radius: 8px;
+	padding: 0.85rem 1rem;
+	margin-bottom: 0.75rem;
+}
+.hmig-card.hmig-verdict {
+	border-width: 0;
+}
+.hmig-user-cb {
+	width: 1.1rem;
+	height: 1.1rem;
+}
+#hmig-repair-actions .button {
+	margin-right: 0.4rem;
+}
+.hmig-history-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+.hmig-history-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 0.75rem;
+	width: 100%;
+	text-align: left;
+	border: 1px solid var(--border-color-primary, rgba(127, 127, 127, 0.35));
+	border-radius: 8px;
+	padding: 0.75rem 1rem;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+.hmig-history-item .hmig-history-body {
+	flex: 1;
+	cursor: pointer;
+	background: transparent;
+	border: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	padding: 0;
+}
+.hmig-history-main {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+}
+.hmig-history-meta {
+	opacity: 0.85;
+	text-align: right;
+	font-size: 0.8rem;
+}
+.hmig-history-meta code {
+	font-size: 0.75rem;
+}
+.hmig-history-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	flex-shrink: 0;
+}
+.hmig-history-actions .button {
+	white-space: nowrap;
+}

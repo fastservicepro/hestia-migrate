@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# info: list remote Hestia users visible to this SSH session
+# options: SESSION
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+session=${1-}
+[[ -n "$session" ]] || die_json 2 "SESSION required"
+sdir=$(session_dir "$session")
+[[ -d "$sdir" ]] || die_json 2 "unknown session"
+
+# Reliable JSON via remote Python — no live du (uses U_DISK from user.conf)
+remote_run "$session" 'bash -s' <<'REMOTE'
+set -e
+python3 - <<'PY'
+import json, os, re, subprocess
+
+hestia = "/usr/local/hestia"
+users_dir = f"{hestia}/data/users"
+root_user = "admin"
+conf = f"{hestia}/conf/hestia.conf"
+if os.path.isfile(conf):
+    for line in open(conf, encoding="utf-8", errors="replace"):
+        if line.startswith("ROOT_USER="):
+            root_user = line.split("'", 2)[1] if "'" in line else line.split("=", 1)[1].strip()
+
+def conf_val(path, key):
+    if not os.path.isfile(path):
+        return ""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith(key + "="):
+                return line.split("'", 2)[1] if "'" in line else line.split("=", 1)[1].strip()
+    return ""
+
+# Prefer CLI list (respects permissions); fall back to directory scan
+names = []
+try:
+    out = subprocess.check_output(
+        [f"{hestia}/bin/v-list-users", "plain"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+    )
+    for line in out.splitlines():
+        parts = line.split()
+        if parts:
+            names.append(parts[0])
+except Exception:
+    if os.path.isdir(users_dir):
+        names = sorted(
+            d for d in os.listdir(users_dir)
+            if os.path.isdir(os.path.join(users_dir, d))
+        )
+
+users = []
+for u in names:
+    ud = os.path.join(users_dir, u)
+    uc = os.path.join(ud, "user.conf")
+    if not os.path.isfile(uc):
+        continue
+    users.append({
+        "user": u,
+        "package": conf_val(uc, "PACKAGE"),
+        "role": conf_val(uc, "ROLE") or "user",
+        "suspended": conf_val(uc, "SUSPENDED") or "no",
+        "disk_mb": int(conf_val(uc, "U_DISK") or 0),
+        "home_mb": int(conf_val(uc, "U_DISK") or 0),
+        "web": int(conf_val(uc, "U_WEB_DOMAINS") or 0),
+        "db": int(conf_val(uc, "U_DATABASES") or 0),
+        "mail": int(conf_val(uc, "U_MAIL_ACCOUNTS") or 0),
+        "dns": int(conf_val(uc, "U_DNS_DOMAINS") or 0),
+        "cron": int(conf_val(uc, "U_CRON_JOBS") or 0),
+        "is_root": u == root_user,
+    })
+
+print(json.dumps({"ok": True, "users": users, "count": len(users)}, ensure_ascii=False))
+PY
+REMOTE

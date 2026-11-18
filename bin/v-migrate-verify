@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# info: verify imported domains via destination IP Host header; optionally enable LE
+# options: JOB [enable_le=no]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+job=${1-}
+enable_le=${2:-no}
+[[ -n "$job" ]] || die_json 2 "JOB required"
+jdir=$(job_dir "$job")
+[[ -d "$jdir" ]] || die_json 2 "unknown job"
+user=$(cat "$jdir/user")
+checklist="$jdir/dns-checklist.json"
+[[ -f "$checklist" ]] || die_json 2 "missing dns checklist"
+
+python3 - "$checklist" "$user" "$enable_le" "$jdir" <<'PY'
+import json, ssl, sys, urllib.request, socket, os, subprocess
+
+checklist = json.load(open(sys.argv[1], encoding="utf-8"))
+user = sys.argv[2]
+enable_le = sys.argv[3] == "yes"
+jdir = sys.argv[4]
+ip = checklist.get("primary_ip") or ""
+results = []
+
+def probe(domain, ip):
+    if not ip:
+        return {"domain": domain, "ok": False, "error": "no destination IP"}
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    out = {"domain": domain, "ip": ip}
+    for scheme, port in (("https", 443), ("http", 80)):
+        try:
+            req = urllib.request.Request(
+                f"{scheme}://{ip}/",
+                headers={"Host": domain, "User-Agent": "hestia-migrate-verify"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=15, context=ctx if scheme == "https" else None) as resp:
+                out[scheme] = {"code": resp.status, "ok": 200 <= resp.status < 500}
+                break
+        except Exception as e:
+            out[scheme] = {"ok": False, "error": str(e)}
+    out["ok"] = bool(out.get("https", {}).get("ok") or out.get("http", {}).get("ok"))
+    return out
+
+for d in checklist.get("domains") or []:
+    results.append(probe(d["domain"], ip))
+    for a in d.get("aliases") or []:
+        results.append(probe(a, ip))
+
+le_result = None
+if enable_le:
+    # Re-enable LETSENCRYPT and issue certs
+    ud = f"/usr/local/hestia/data/users/{user}"
+    web = f"{ud}/web.conf"
+    if os.path.isfile(web):
+        text = open(web, encoding="utf-8").read()
+        # only domains that had ssl before — issue for all web domains
+        import re
+        domains = re.findall(r"DOMAIN='([^']+)'", text)
+        le_result = []
+        for domain in domains:
+            try:
+                r = subprocess.run(
+                    ["/usr/local/hestia/bin/v-add-letsencrypt-domain", user, domain, "", "yes"],
+                    capture_output=True, text=True, timeout=180,
+                )
+                le_result.append({"domain": domain, "code": r.returncode, "out": (r.stdout or r.stderr)[:200]})
+            except Exception as e:
+                le_result.append({"domain": domain, "error": str(e)})
+
+out = {"ok": True, "user": user, "probes": results, "letsencrypt": le_result}
+json.dump(out, open(f"{jdir}/verify.json", "w"), indent=2)
+print(json.dumps(out, ensure_ascii=False))
+PY
