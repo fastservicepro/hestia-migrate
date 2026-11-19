@@ -10,5 +10,6 @@ hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-verify
 hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-inspect-job
 hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-repair
 hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-list-jobs
+hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-jobs-for-users
 hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-wipe-session
 hestiaweb ALL=(root) NOPASSWD: /usr/local/hestia/bin/v-migrate-delete-job

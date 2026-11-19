@@ -150,7 +150,9 @@ status "restore" 60 "Restoring user with v-restore-user"
 export PATH=$PATH:/usr/local/hestia/bin
 if ! /usr/local/hestia/bin/v-restore-user "$user" "$base" '*' '*' '*' '*' '*' '*' no \
 	>"$jdir/restore.log" 2>&1; then
-	fail_job "v-restore-user failed; see job restore.log"
+	detail=$(tail -n 8 "$jdir/restore.log" 2>/dev/null | tr '\n' ' ' | head -c 400)
+	# Keep archive for Repair; surface real Hestia error in progress/UI
+	fail_job "v-restore-user failed: ${detail:-see job restore.log}"
 fi
 
 status "post" 85 "Post-restore fixes (LE hold, counters)"

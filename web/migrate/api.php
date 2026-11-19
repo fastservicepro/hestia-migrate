@@ -157,18 +157,24 @@ switch ($action) {
 		break;
 
 	case "jobs_for_users":
+		// jobs/ is root-only (0700); resolve via sudo CLI, not PHP glob
 		$users_raw = trim($_GET["users"] ?? ($_POST["users"] ?? ""));
 		$users = array_values(array_filter(array_map("trim", preg_split('/[\s,]+/', $users_raw))));
-		$dir = "/usr/local/hestia/data/hestia-migrate/jobs";
-		$found = [];
-		foreach ($users as $u) {
-			$matches = glob("$dir/*-$u");
-			if ($matches) {
-				rsort($matches);
-				$found[$u] = basename($matches[0]);
-			}
+		if (!$users) {
+			echo json_encode(["ok" => true, "jobs" => []]);
+			exit();
 		}
-		echo json_encode(["ok" => true, "jobs" => $found]);
+		$cmd = "$bin /usr/local/hestia/bin/v-migrate-jobs-for-users";
+		foreach ($users as $u) {
+			if (!preg_match('/^[A-Za-z0-9._-]+$/', $u)) {
+				continue;
+			}
+			$cmd .= " " . escapeshellarg($u);
+		}
+		[$rc, $raw, $json] = migrate_exec($cmd);
+		echo $json
+			? json_encode($json)
+			: json_encode(["ok" => false, "error" => $raw ?: "jobs lookup failed", "code" => $rc]);
 		break;
 
 	case "inspect":

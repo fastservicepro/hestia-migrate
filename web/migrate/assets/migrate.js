@@ -415,30 +415,42 @@
 	async function pollBatch(users) {
 		for (;;) {
 			const map = await api("jobs_for_users", { users }, "GET");
+			if (map && map.ok === false) {
+				$("#hmig-progress-msg").textContent =
+					map.error || "Cannot read job status (sudo / jobs-for-users). Reinstall hestia-migrate 1.2.5+.";
+				$("#hmig-progress-log").textContent = JSON.stringify(map, null, 2);
+			}
 			batchJobs = map.jobs || {};
 			const cards = [];
 			let done = 0;
 			let failed = 0;
 			let running = 0;
+			let activeUser = null;
 			for (const u of users) {
 				const jid = batchJobs[u];
 				if (!jid) {
-					cards.push(`<div class="hmig-card">⏳ ${esc(u)} — waiting…</div>`);
+					cards.push(
+						`<div class="hmig-card">⏳ <strong>${esc(u)}</strong> · queued · waiting for previous user (batch is sequential)</div>`
+					);
 					running++;
 					continue;
 				}
 				const st = await api("status", { job: jid }, "GET");
-				const state = st.state || "?";
-				const pct = st.progress?.percent || 0;
+				const state = st.state || st.progress?.stage || "?";
+				const pct = Number(st.progress?.percent) || 0;
 				const msg = st.progress?.message || state;
-				if (state === "done" || st.result?.ok) done++;
-				else if (state === "failed" || String(state).startsWith("failed")) failed++;
-				else running++;
+				const isFailed = state === "failed" || String(state).startsWith("failed");
+				const isDone = state === "done" || !!st.result?.ok;
+				if (isDone) done++;
+				else if (isFailed) failed++;
+				else {
+					running++;
+					activeUser = u;
+				}
+				const icon = isFailed ? "✗" : isDone ? "✓" : "…";
 				cards.push(
-					`<div class="hmig-card">${state === "failed" ? "✗" : state === "done" ? "✓" : "…"} <strong>${esc(
-						u
-					)}</strong> · ${esc(state)} · ${pct}% · ${esc(msg)}
-					${state === "failed" ? ` <button type="button" class="button button-secondary hmig-open-repair" data-job="${esc(jid)}">Repair</button>` : ""}
+					`<div class="hmig-card">${icon} <strong>${esc(u)}</strong> · ${esc(state)} · ${pct}% · ${esc(msg)}
+					${isFailed ? ` <button type="button" class="button button-secondary hmig-open-repair" data-job="${esc(jid)}">Repair</button>` : ""}
 					</div>`
 				);
 				if (!jobId) jobId = jid;
@@ -449,8 +461,10 @@
 			);
 			const total = users.length;
 			const pctAll = Math.round(((done + failed) / total) * 100);
-			$("#hmig-bar").style.width = `${Math.max(5, pctAll)}%`;
-			$("#hmig-progress-msg").textContent = `Done ${done}/${total} · Failed ${failed} · Running/waiting ${running}`;
+			$("#hmig-bar").style.width = `${Math.max(5, pctAll || (activeUser ? 20 : 5))}%`;
+			$("#hmig-progress-msg").textContent = activeUser
+				? `Running ${activeUser} · Done ${done}/${total} · Failed ${failed} · Queued ${Math.max(0, running - 1)}`
+				: `Done ${done}/${total} · Failed ${failed} · Running/queued ${running}`;
 			if (failed) $("#hmig-goto-repair").hidden = false;
 			if (done + failed >= total) {
 				await wipeSessionKeys("Import finished — wiping temporary SSH keys.");
@@ -463,7 +477,7 @@
 				}
 				return;
 			}
-			await new Promise((r) => setTimeout(r, 2500));
+			await new Promise((r) => setTimeout(r, 2000));
 		}
 	}
 

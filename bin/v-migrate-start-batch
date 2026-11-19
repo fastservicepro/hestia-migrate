@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # info: start transfers for multiple users sequentially in background
 # options: SESSION ACCEPT_WARNINGS USER [USER...]
+#
+# Runs v-migrate-transfer in the foreground for each user (one at a time) so
+# restores do not fight over disk/DB. The batch itself is backgrounded.
 set -euo pipefail
 source /usr/local/hestia-migrate/lib/common.sh
 require_root
@@ -27,10 +30,10 @@ batch_log="$MIGRATE_DATA/jobs/batch-${batch_id}.log"
 	echo "echo \"[batch $batch_id] start \$(date -Is)\""
 	for u in "$@"; do
 		echo "echo \"[batch] starting user $(printf '%q' "$u")\""
-		echo "/usr/local/hestia/bin/v-migrate-start \"\$SESSION\" $(printf '%q' "$u") \"\$ACCEPT\""
+		# Foreground transfer — wait until finished before next user
+		echo "/usr/local/hestia-migrate/bin/v-migrate-transfer \"\$SESSION\" $(printf '%q' "$u") \"\$ACCEPT\""
 		echo "rc=\$?"
 		echo "echo \"[batch] user $(printf '%q' "$u") exit \$rc\""
-		echo "sleep 2"
 	done
 	echo "echo \"[batch $batch_id] done \$(date -Is)\""
 } >"$jobs_file"
@@ -40,13 +43,11 @@ nohup bash "$jobs_file" >"$batch_log" 2>&1 &
 pid=$!
 echo "$pid" >"$MIGRATE_DATA/jobs/batch-${batch_id}.pid"
 
-# Wait for first job directory (v-migrate-transfer creates it)
 first_job=""
 first_user=$1
 for _ in $(seq 1 80); do
 	sleep 0.25
 	if ! kill -0 "$pid" 2>/dev/null; then
-		# batch shell already exited — show why
 		die_json 6 "batch exited before creating jobs; log: $(tail -n 30 "$batch_log" 2>/dev/null | tr '\n' ' ')"
 	fi
 	cand=$(ls -1dt "$MIGRATE_DATA/jobs/"*-"$first_user" 2>/dev/null | head -n1 || true)

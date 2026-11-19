@@ -3,7 +3,7 @@
 
 **User import module for [Hestia Control Panel](https://hestiacp.com/)** — migrate accounts from one Hestia server to another without manual backup / scp / restore in a terminal.
 
-Latest release: **Version 1.2.3**
+Latest release: **Version 1.2.5**
 
 Please go easy on this project — this is my first publicly shared code. I built it for myself because backing up and moving Hestia users only through the terminal was painfully inconvenient. The module is meant simply to make transferring users between your own Hestia servers easier. If it’s useful to anyone else, I’m glad. Contributions and improvements are very welcome.
 
@@ -97,7 +97,7 @@ cd hestia-migrate
 bash install.sh
 ```
 
-Pin a specific version if needed: `.../download/hestia-migrate-1.2.3.zip`
+Pin a specific version if needed: `.../download/hestia-migrate-1.2.5.zip`
 
 `install.sh` / `install-remote.sh` install **`sshpass` and the other required packages** automatically. Without `sshpass`, Connect cannot reliably push a temporary SSH key to the source server.
 

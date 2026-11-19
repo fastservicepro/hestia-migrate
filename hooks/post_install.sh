@@ -29,6 +29,7 @@ for cmd in \
 	v-migrate-inspect-job \
 	v-migrate-repair \
 	v-migrate-list-jobs \
+	v-migrate-jobs-for-users \
 	v-migrate-wipe-session \
 	v-migrate-delete-job
 do

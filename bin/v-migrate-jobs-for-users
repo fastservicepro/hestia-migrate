@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# info: map usernames to newest job ids (for panel polling; root-only data dir)
+# options: USER [USER...]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+mkdir -p "$MIGRATE_DATA/jobs"
+printf '{"ok":true,"jobs":{'
+first=1
+for user in "$@"; do
+	[[ -n "$user" ]] || continue
+	[[ "$user" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+	cand=$(ls -1dt "$MIGRATE_DATA/jobs/"*-"$user" 2>/dev/null | head -n1 || true)
+	[[ -n "$cand" && -d "$cand" ]] || continue
+	id=$(basename "$cand")
+	if [[ "$first" -eq 0 ]]; then
+		printf ','
+	fi
+	first=0
+	printf '"%s":"%s"' "$(json_escape "$user")" "$(json_escape "$id")"
+done
+printf '}}\n'
