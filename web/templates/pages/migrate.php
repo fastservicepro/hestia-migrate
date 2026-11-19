@@ -135,6 +135,14 @@
 			<label class="u-mt10" id="hmig-accept-sw-wrap" hidden>
 				<input type="checkbox" id="hmig-accept-sw"> <?= _("Install the listed PHP versions on this server before importing (via Hestia multiphp)") ?>
 			</label>
+			<div class="hmig-notice hmig-notice-wait u-mt10" id="hmig-sw-wait-hint" hidden>
+				<i class="fas fa-hourglass-half"></i>
+				<div>
+					<strong><?= _("Please keep this page open") ?></strong>
+					<p class="u-text-small u-mb0"><?= _("Installing PHP with v-add-web-php can take several minutes with little visible progress. Do not close the tab or navigate away until Transfer finishes.") ?></p>
+					<p class="u-text-small u-mb0 hmig-notice-ru"><?= _("Не закрывайте эту страницу. Установка PHP может занять несколько минут — дождитесь завершения этапа Transfer.") ?></p>
+				</div>
+			</div>
 			<div class="u-mt20">
 				<button type="button" class="button button-secondary" id="hmig-back-users">
 					<i class="fas fa-arrow-left"></i> <?= _("Back") ?>
@@ -151,6 +159,14 @@
 				<div class="hmig-progress-bar" id="hmig-bar" style="width:0%"></div>
 			</div>
 			<p id="hmig-progress-msg" class="u-mt10"></p>
+			<div class="hmig-notice hmig-notice-wait u-mt10" id="hmig-prep-wait-notice" hidden>
+				<i class="fas fa-spinner fa-pulse"></i>
+				<div>
+					<strong><?= _("Installing PHP — please wait") ?></strong>
+					<p class="u-text-small u-mb0"><?= _("Do not leave this page. Hestia is running v-add-web-php; this often takes 5–15 minutes and the log may stay quiet.") ?></p>
+					<p class="u-text-small u-mb0 hmig-notice-ru"><?= _("Не уходите со страницы. Идёт установка PHP (v-add-web-php), обычно 5–15 минут; в логе может долго не быть новых строк.") ?></p>
+				</div>
+			</div>
 			<div id="hmig-job-cards" class="u-mt10"></div>
 			<pre class="hmig-log" id="hmig-progress-log"></pre>
 			<button type="button" class="button button-secondary u-mt10" id="hmig-goto-repair" hidden>

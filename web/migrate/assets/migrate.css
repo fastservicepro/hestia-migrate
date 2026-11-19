@@ -130,6 +130,33 @@ body.dark .hmig-verdict.blocked,
 	background: linear-gradient(90deg, #7c3aed, #2563eb);
 	transition: width 0.3s ease;
 }
+.hmig-notice {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.65rem;
+	padding: 0.85rem 1rem;
+	border-radius: 8px;
+	border: 1px solid rgba(124, 58, 237, 0.45);
+	background: rgba(124, 58, 237, 0.12);
+}
+.hmig-notice i {
+	margin-top: 0.15rem;
+	color: #a78bfa;
+	flex-shrink: 0;
+}
+.hmig-notice-wait strong {
+	display: block;
+	margin-bottom: 0.35rem;
+}
+.hmig-notice-ru {
+	opacity: 0.9;
+	margin-top: 0.35rem !important;
+}
+body.dark .hmig-notice,
+.dark .hmig-notice {
+	background: rgba(124, 58, 237, 0.22);
+	border-color: rgba(167, 139, 250, 0.45);
+}
 #hmig-connect-form .button {
 	margin-right: 0.5rem;
 	margin-top: 0.25rem;

@@ -370,9 +370,22 @@
 		start.disabled = !(warnOk && softwareReady());
 	}
 
+	function isPhpPrepStage(batchSt) {
+		if (!batchSt) return false;
+		const stage = batchSt.stage || "";
+		const msg = (batchSt.message || "").toLowerCase();
+		return stage === "prep" || stage === "prep_php" || stage === "queued" || /installing php|v-add-web-php|preparing software/.test(msg);
+	}
+
+	function setPrepWaitNotice(visible) {
+		const el = $("#hmig-prep-wait-notice");
+		if (el) el.hidden = !visible;
+	}
+
 	function renderSoftwareBox() {
 		const box = $("#hmig-software-box");
 		const swWrap = $("#hmig-accept-sw-wrap");
+		const swHint = $("#hmig-sw-wait-hint");
 		const swCb = $("#hmig-accept-sw");
 		const needInstall = batchSoftware.needs_install || [];
 		const needRemap = batchSoftware.needs_remap || [];
@@ -382,6 +395,7 @@
 			box.hidden = true;
 			box.innerHTML = "";
 			swWrap.hidden = true;
+			if (swHint) swHint.hidden = true;
 			swCb.checked = false;
 			return;
 		}
@@ -419,6 +433,7 @@
 		}
 		box.innerHTML = lines.join("");
 		swWrap.hidden = needInstall.length === 0;
+		if (swHint) swHint.hidden = needInstall.length === 0;
 		swCb.checked = false;
 		swCb.onchange = syncStartEnabled;
 		box.querySelectorAll(".hmig-remap").forEach((sel) => sel.addEventListener("change", syncStartEnabled));
@@ -498,6 +513,7 @@
 		setStep(4);
 		$("#hmig-bar").style.width = "5%";
 		$("#hmig-progress-msg").textContent = `Starting import of ${importable.length} user(s)…`;
+		setPrepWaitNotice((batchSoftware.needs_install || []).length > 0);
 		$("#hmig-goto-repair").hidden = true;
 		const accept = $("#hmig-accept").checked ? "yes" : "no";
 		const acceptSw = $("#hmig-accept-sw")?.checked ? "yes" : "no";
@@ -532,6 +548,7 @@
 				if (batchSt?.ok) {
 					const bp = Number(batchSt.percent) || 0;
 					if (batchSt.stage === "prep" || batchSt.stage === "prep_php" || batchSt.stage === "queued") {
+						setPrepWaitNotice(isPhpPrepStage(batchSt));
 						$("#hmig-bar").style.width = `${Math.max(5, bp)}%`;
 						$("#hmig-progress-msg").textContent = batchSt.message || "Preparing software…";
 						$("#hmig-job-cards").innerHTML = `<div class="hmig-card">… ${esc(
@@ -548,6 +565,7 @@
 						await new Promise((r) => setTimeout(r, 2000));
 						continue;
 					}
+					setPrepWaitNotice(false);
 					if (batchSt.stage === "failed") {
 						$("#hmig-progress-msg").textContent = batchSt.message || "Batch failed";
 						$("#hmig-progress-log").textContent = batchSt.log_tail || JSON.stringify(batchSt, null, 2);
