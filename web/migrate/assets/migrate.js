@@ -697,11 +697,14 @@
 			<ul class="hmig-list">${miss || "<li>Nothing critical detected</li>"}</ul>
 		`;
 		const actions = data.actions || [];
-		const extra = [
-			{ id: "restore_all", label: "Restore everything from archive" },
+		const extra = [];
+		if (data.archive?.present) {
+			extra.push({ id: "restore_all", label: "Restore everything from archive" });
+		}
+		extra.push(
 			{ id: "fix_nginx", label: "Fix nginx & reload" },
-			{ id: "hold_le", label: "Hold Let's Encrypt" },
-		];
+			{ id: "hold_le", label: "Hold Let's Encrypt" }
+		);
 		const all = [...actions];
 		for (const e of extra) {
 			if (!all.find((a) => a.id === e.id)) all.push(e);

@@ -69,7 +69,8 @@ fi
 
 # Software gate: PHP runtime must exist (prep) or be remapped — never silent tpl-only hope
 remap_env=${MIGRATE_REMAP_PHP-}
-python3 - "$analysis" "$remap_env" <<'PY' || fail_job "software gate failed (PHP runtime / remap)"
+sw_gate_err=$(
+python3 - "$analysis" "$remap_env" <<'PY' 2>&1
 import json, os, re, sys
 
 analysis = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -118,6 +119,7 @@ if errors:
     sys.exit(1)
 print("software gate ok")
 PY
+) || fail_job "${sw_gate_err:-software gate failed (PHP runtime / remap)}"
 
 status "prepare" 5 "Copying missing package and templates from source"
 

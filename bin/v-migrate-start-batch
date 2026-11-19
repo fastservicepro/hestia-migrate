@@ -38,6 +38,41 @@ if [[ "$remap_php" == "-" || "$remap_php" == "none" || -z "$remap_php" ]]; then
 	remap_php=""
 fi
 
+sdir=$(session_dir "$session")
+need_install_json=$(
+python3 - "$sdir" "$@" <<'PY' 2>/dev/null || true
+import json, os, sys
+sdir, users = sys.argv[1], sys.argv[2:]
+needed, remap = set(), set()
+for u in users:
+    path = os.path.join(sdir, f"analysis-{u}.json")
+    if not os.path.isfile(path):
+        continue
+    try:
+        sw = (json.load(open(path, encoding="utf-8")).get("software") or {})
+    except Exception:
+        continue
+    needed.update(sw.get("needs_install") or [])
+    remap.update(sw.get("needs_remap") or [])
+print(json.dumps({"needs_install": sorted(needed), "needs_remap": sorted(remap)}))
+PY
+)
+if [[ -n "$need_install_json" ]]; then
+	needs_install=$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1]).get("needs_install") or []))' "$need_install_json")
+	needs_remap=$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1]).get("needs_remap") or []))' "$need_install_json")
+	if [[ -n "$needs_remap" && -z "$remap_php" ]]; then
+		die_json 5 "PHP remap required ($needs_remap) before import"
+	fi
+	if [[ -n "$needs_install" ]]; then
+		if [[ "$accept_sw" != "yes" ]]; then
+			die_json 5 "PHP install required ($needs_install); accept_software=yes and install_php required"
+		fi
+		if [[ -z "$install_php" ]]; then
+			die_json 5 "install_php must list: $needs_install"
+		fi
+	fi
+fi
+
 printf '{"stage":"queued","percent":1,"message":"Batch queued","updated":"%s","batch_id":"%s"}\n' \
 	"$(date -Is)" "$batch_id" >"$batch_progress"
 

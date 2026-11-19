@@ -102,6 +102,13 @@ if arch["present"]:
     except Exception as e:
         arch["error"] = str(e)
 
+progress = {}
+if os.path.isfile(f"{jdir}/progress.json"):
+    try:
+        progress = json.load(open(f"{jdir}/progress.json", encoding="utf-8"))
+    except Exception:
+        pass
+
 missing = []
 actions = []
 
@@ -110,7 +117,19 @@ def need(key, title, action, detail):
     actions.append({"id": action, "label": title, "key": key})
 
 if not exists_user():
-    need("user", "User account missing", "restore_all", "Run full restore from archive")
+    if arch["present"]:
+        need("user", "User account missing", "restore_all", "Run full restore from archive")
+    else:
+        msg = (progress.get("message") or "").strip()
+        if "software gate" in msg.lower() or "php" in msg.lower():
+            detail = msg or "Import stopped before backup — install/remap PHP, then run import again"
+        else:
+            detail = msg or "No local archive in /backup — re-run import from the wizard (Repair needs the archive)"
+        missing.append({
+            "key": "user",
+            "title": "Import did not complete",
+            "detail": detail,
+        })
 else:
     if arch["present"] and arch["web"] and web_n == 0:
         need("web", "Web domains not restored", "restore_web", f"Archive has {arch['web']} web domain(s)")
@@ -140,12 +159,6 @@ except Exception as e:
     need("nginx", "Nginx check failed", "fix_nginx", str(e))
 
 state = open(f"{jdir}/state").read().strip() if os.path.isfile(f"{jdir}/state") else "unknown"
-progress = {}
-if os.path.isfile(f"{jdir}/progress.json"):
-    try:
-        progress = json.load(open(f"{jdir}/progress.json", encoding="utf-8"))
-    except Exception:
-        pass
 
 out = {
     "ok": True,

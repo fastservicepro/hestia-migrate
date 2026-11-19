@@ -179,6 +179,51 @@ switch ($action) {
 			echo json_encode(["ok" => false, "error" => "session and users required"]);
 			exit();
 		}
+		$migrate_data = "/usr/local/hestia/data/hestia-migrate";
+		$needed_install = [];
+		$needed_remap = [];
+		foreach ($users as $u) {
+			if (!preg_match('/^[a-zA-Z0-9._-]+$/', $u)) {
+				continue;
+			}
+			$apath = $migrate_data . "/sessions/" . $session . "/analysis-" . $u . ".json";
+			if (!is_readable($apath)) {
+				continue;
+			}
+			$aj = json_decode((string) file_get_contents($apath), true);
+			if (!is_array($aj)) {
+				continue;
+			}
+			$sw = $aj["software"] ?? [];
+			foreach ($sw["needs_install"] ?? [] as $ver) {
+				$needed_install[$ver] = true;
+			}
+			foreach ($sw["needs_remap"] ?? [] as $ver) {
+				$needed_remap[$ver] = true;
+			}
+		}
+		if ($needed_install && $accept_sw !== "yes") {
+			echo json_encode([
+				"ok" => false,
+				"error" => "PHP " . implode(", ", array_keys($needed_install))
+					. " must be installed before import — confirm the PHP install checkbox (accept_software).",
+			]);
+			exit();
+		}
+		if ($needed_remap && ($remap_php === "-" || $remap_php === "")) {
+			echo json_encode([
+				"ok" => false,
+				"error" => "Remap required for PHP " . implode(", ", array_keys($needed_remap)) . " before import.",
+			]);
+			exit();
+		}
+		if ($needed_install && ($install_php === "-" || $install_php === "")) {
+			echo json_encode([
+				"ok" => false,
+				"error" => "Missing install_php for: " . implode(", ", array_keys($needed_install)),
+			]);
+			exit();
+		}
 		$cmd =
 			"$bin /usr/local/hestia/bin/v-migrate-start-batch " .
 			escapeshellarg($session) .
