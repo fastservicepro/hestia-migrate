@@ -11,6 +11,7 @@ accept=${3:-no}
 [[ -n "$session" && -n "$user" ]] || die_json 2 "SESSION USER required"
 
 mkdir -p "$MIGRATE_DATA/jobs"
+chmod 700 "$MIGRATE_DATA/jobs"
 log="$MIGRATE_DATA/jobs/bg-$(date +%Y%m%d%H%M%S)-${user}.log"
 # Pre-create a marker so the panel can find the job quickly after transfer creates it
 nohup /usr/local/hestia-migrate/bin/v-migrate-transfer "$session" "$user" "$accept" >"$log" 2>&1 &
