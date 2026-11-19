@@ -13,7 +13,9 @@
 		</div>
 		<div class="toolbar-buttons">
 			<span class="u-text-small" id="hmig-version">
-				<i class="fas fa-people-arrows icon-purple"></i> hestia-migrate
+				<i class="fas fa-people-arrows icon-purple"></i>
+				hestia-migrate
+				<?= tohtml(trim(@file_get_contents("/usr/local/hestia-migrate/VERSION") ?: "")) ?>
 			</span>
 		</div>
 	</div>

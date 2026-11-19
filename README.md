@@ -87,13 +87,17 @@ bash install.sh
 
 ### Install from a release zip
 
+Use the **stable** asset name (always the newest release):
+
 ```bash
 cd /usr/local/src
-wget https://github.com/fastservicepro/hestia-migrate/releases/latest/download/hestia-migrate-1.2.3.zip
-unzip hestia-migrate-1.2.3.zip -d hestia-migrate
+wget -O hestia-migrate.zip https://github.com/fastservicepro/hestia-migrate/releases/latest/download/hestia-migrate.zip
+unzip -o hestia-migrate.zip -d hestia-migrate
 cd hestia-migrate
 bash install.sh
 ```
+
+Pin a specific version if needed: `.../download/hestia-migrate-1.2.3.zip`
 
 `install.sh` / `install-remote.sh` install **`sshpass` and the other required packages** automatically. Without `sshpass`, Connect cannot reliably push a temporary SSH key to the source server.
 
@@ -101,19 +105,48 @@ bash install.sh
 
 ## How to upgrade
 
+GitHub does **not** push updates to your server. You re-run install when you want a newer version.
+
+**Recommended (always tracks latest `main` / newest release tag you pull):**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/install-remote.sh | bash
 ```
 
-Or:
+Or from an existing clone:
 
 ```bash
 cd /usr/local/src/hestia-migrate
-git pull
+git fetch --tags
+git pull --ff-only
 bash install.sh
 ```
 
+**Check whether an update exists**
+
+```bash
+echo -n "installed: "; cat /usr/local/hestia-migrate/VERSION
+echo -n "github:    "; curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/VERSION
+```
+
+If `github` is newer than `installed`, run the upgrade command above.
+
 `install.sh` is idempotent: it refreshes files, sudoers, the Users button, and the Plugins Yes/No control. After a Hestia package upgrade, `/etc/hestiacp/hooks/post_install.sh` re-applies the UI patches automatically.
+
+---
+
+## Versioning on GitHub (how “latest” works)
+
+| Piece | Role |
+|-------|------|
+| File `VERSION` in the repo | Current version string (e.g. `1.2.3`) |
+| Git tag `v1.2.3` | Marks that commit as a release |
+| GitHub **Release** for that tag | Page people see under Releases; can attach zip files |
+| URL `.../releases/latest/...` | GitHub alias → **newest non-prerelease** Release |
+| Asset `hestia-migrate.zip` | **Stable filename** every release — `latest/download/hestia-migrate.zip` always works |
+| Asset `hestia-migrate-1.2.3.zip` | Optional pinned copy for that version only |
+
+So: publish Release **v1.2.3**, attach **both** zips (same contents). Next time you ship 1.2.4, attach `hestia-migrate.zip` again (overwrites “latest” link target) plus `hestia-migrate-1.2.4.zip`.
 
 ---
 
