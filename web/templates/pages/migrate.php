@@ -127,9 +127,13 @@
 			<h1 class="u-mb10"><i class="fas fa-clipboard-check icon-blue"></i> <?= _("Compatibility &amp; preview") ?></h1>
 			<p class="u-mb10"><?= _("Review what will be imported for each selected account before starting.") ?></p>
 			<div id="hmig-batch-summary" class="hmig-box u-mb20"></div>
+			<div id="hmig-software-box" class="hmig-box u-mb20" hidden></div>
 			<div id="hmig-batch-results"></div>
 			<label class="u-mt10" id="hmig-accept-wrap" hidden>
 				<input type="checkbox" id="hmig-accept"> <?= _("I accept warnings and want to continue") ?>
+			</label>
+			<label class="u-mt10" id="hmig-accept-sw-wrap" hidden>
+				<input type="checkbox" id="hmig-accept-sw"> <?= _("Install the listed PHP versions on this server before importing (via Hestia multiphp)") ?>
 			</label>
 			<div class="u-mt20">
 				<button type="button" class="button button-secondary" id="hmig-back-users">

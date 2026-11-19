@@ -67,6 +67,58 @@ if [[ "${MIGRATE_BG:-0}" == "1" ]]; then
 	# continue in same process when called from nohup wrapper
 fi
 
+# Software gate: PHP runtime must exist (prep) or be remapped — never silent tpl-only hope
+remap_env=${MIGRATE_REMAP_PHP-}
+python3 - "$analysis" "$remap_env" <<'PY' || fail_job "software gate failed (PHP runtime / remap)"
+import json, os, re, sys
+
+analysis = json.load(open(sys.argv[1], encoding="utf-8"))
+remap_raw = sys.argv[2] or ""
+remap = {}
+for part in remap_raw.split(","):
+    part = part.strip()
+    if not part or ":" not in part:
+        continue
+    a, b = part.split(":", 1)
+    a, b = a.strip(), b.strip()
+    if re.match(r"^\d+\.\d+$", a) and re.match(r"^\d+\.\d+$", b):
+        remap[a] = b
+
+software = analysis.get("software") or {}
+php_items = software.get("php") or []
+
+def runtime_ok(ver):
+    return os.path.isdir(f"/etc/php/{ver}/fpm") or os.path.isfile(f"/etc/init.d/php{ver}-fpm")
+
+errors = []
+for item in php_items:
+    ver = item.get("version") or ""
+    action = item.get("action") or ""
+    backend = item.get("backend") or ""
+    if not ver:
+        continue
+    if runtime_ok(ver):
+        continue
+    if ver in remap and runtime_ok(remap[ver]):
+        continue
+    if action == "needs_install":
+        errors.append(
+            f"PHP {ver} (backend {backend}) is still missing — run software prep with consent, or remap"
+        )
+    elif action == "needs_remap":
+        errors.append(
+            f"PHP {ver} (backend {backend}) cannot be installed; provide remap e.g. {ver}:8.5"
+        )
+    else:
+        # analysis said ok/template_missing but runtime vanished
+        errors.append(f"PHP {ver} runtime missing for backend {backend}")
+
+if errors:
+    print("; ".join(errors), file=sys.stderr)
+    sys.exit(1)
+print("software gate ok")
+PY
+
 status "prepare" 5 "Copying missing package and templates from source"
 
 # Copy package
@@ -78,18 +130,8 @@ if [[ -n "$pkg" && ! -f "/usr/local/hestia/data/packages/$pkg.pkg" ]]; then
 		>"/usr/local/hestia/data/packages/$pkg.sh" 2>/dev/null || true
 fi
 
-# Copy templates referenced by sites
-python3 - "$analysis" "$sdir" <<'PY' >"$jdir/templates-needed.txt"
-import json, sys
-a = json.load(open(sys.argv[1]))
-comp = a.get("composition") or {}
-for key in ("templates", "backends", "proxies"):
-    for x in filter(None, (comp.get(key) or "").split(",")):
-        print(x)
-PY
-
-# Fetch template tree for used names via tar stream from remote
-status "templates" 10 "Fetching web templates"
+# Copy templates only when PHP runtime for that backend already exists (or non-PHP tpl)
+status "templates" 10 "Fetching web templates (runtime-gated)"
 remote_run "$session" 'bash -s' <<'REMOTE' >"$jdir/templates.tar" || true
 set -e
 cd /usr/local/hestia/data/templates
@@ -98,19 +140,61 @@ REMOTE
 if [[ -s "$jdir/templates.tar" ]]; then
 	mkdir -p "$jdir/templates-extract"
 	tar -xf "$jdir/templates.tar" -C "$jdir/templates-extract" 2>/dev/null || true
-	# Only install missing custom templates (do not overwrite stock)
-	find "$jdir/templates-extract" -type f \( -name '*.tpl' -o -name '*.stpl' -o -name '*.pkg' -o -name '*.sh' \) | while read -r f; do
-		rel=${f#"$jdir/templates-extract/"}
-		dest="/usr/local/hestia/data/templates/$rel"
-		# packages path adjustment
-		if [[ "$rel" == packages/* ]]; then
-			dest="/usr/local/hestia/data/$rel"
-		fi
-		if [[ ! -f "$dest" ]]; then
-			mkdir -p "$(dirname "$dest")"
-			cp -a "$f" "$dest"
-		fi
-	done
+	python3 - "$jdir/templates-extract" "$analysis" "$remap_env" <<'PY'
+import json, os, re, shutil, sys
+
+root, analysis_path, remap_raw = sys.argv[1:4]
+analysis = json.load(open(analysis_path, encoding="utf-8"))
+needed = set()
+comp = analysis.get("composition") or {}
+for key in ("templates", "backends", "proxies"):
+    for x in filter(None, (comp.get(key) or "").split(",")):
+        needed.add(x)
+
+remap = {}
+for part in (remap_raw or "").split(","):
+    if ":" in part:
+        a, b = part.split(":", 1)
+        remap[a.strip()] = b.strip()
+
+def php_ver(name):
+    m = re.search(r"PHP[-_]?(\d+)[._](\d+)", name or "", re.I)
+    return f"{m.group(1)}.{m.group(2)}" if m else None
+
+def runtime_ok(ver):
+    return os.path.isdir(f"/etc/php/{ver}/fpm") or os.path.isfile(f"/etc/init.d/php{ver}-fpm")
+
+copied = 0
+skipped = 0
+for dirpath, _, files in os.walk(root):
+    for fn in files:
+        if not fn.endswith((".tpl", ".stpl", ".pkg", ".sh")):
+            continue
+        f = os.path.join(dirpath, fn)
+        rel = os.path.relpath(f, root).replace("\\", "/")
+        dest = f"/usr/local/hestia/data/templates/{rel}"
+        if rel.startswith("packages/"):
+            dest = f"/usr/local/hestia/data/{rel}"
+        if os.path.isfile(dest):
+            continue
+        base = fn.rsplit(".", 1)[0]
+        # Only gate php-fpm backend templates
+        if "/php-fpm/" in rel.replace("\\", "/"):
+            ver = php_ver(base)
+            if ver:
+                target = remap.get(ver, ver)
+                if not runtime_ok(target) and not runtime_ok(ver):
+                    skipped += 1
+                    continue
+            if needed and base not in needed and not any(base.startswith(n) or n.startswith(base) for n in needed):
+                # still allow stock PHP-* if referenced version matches needed
+                if not any(php_ver(n) == ver for n in needed):
+                    continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(f, dest)
+        copied += 1
+print(f"templates copied={copied} skipped_no_runtime={skipped}")
+PY
 fi
 
 status "backup" 20 "Creating user archive on source (official v-backup-user)"
@@ -155,7 +239,7 @@ if ! /usr/local/hestia/bin/v-restore-user "$user" "$base" '*' '*' '*' '*' '*' '*
 	fail_job "v-restore-user failed: ${detail:-see job restore.log}"
 fi
 
-status "post" 85 "Post-restore fixes (LE hold, counters)"
+status "post" 85 "Post-restore fixes (LE hold, PHP remap, counters)"
 # Hold Let's Encrypt renewals until DNS confirmed
 if [[ -f "/usr/local/hestia/data/users/$user/web.conf" ]]; then
 	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/web.conf" || true
@@ -163,6 +247,79 @@ fi
 if [[ -f "/usr/local/hestia/data/users/$user/mail.conf" ]]; then
 	sed -i "s/LETSENCRYPT='yes'/LETSENCRYPT='no'/g" "/usr/local/hestia/data/users/$user/mail.conf" || true
 fi
+
+# Remap domain backends when source PHP cannot stay on destination
+if [[ -n "${MIGRATE_REMAP_PHP-}" ]]; then
+	python3 - "$user" "$MIGRATE_REMAP_PHP" <<'PY' >"$jdir/remap.log" 2>&1 || true
+import os, re, subprocess, sys
+user, remap_raw = sys.argv[1], sys.argv[2]
+remap = {}
+for part in remap_raw.split(","):
+    part = part.strip()
+    if ":" not in part:
+        continue
+    a, b = part.split(":", 1)
+    a, b = a.strip(), b.strip()
+    if a and b:
+        remap[a] = b
+if not remap:
+    sys.exit(0)
+
+wc = f"/usr/local/hestia/data/users/{user}/web.conf"
+if not os.path.isfile(wc):
+    sys.exit(0)
+
+def php_ver(backend):
+    m = re.search(r"PHP[-_]?(\d+)[._](\d+)", backend or "", re.I)
+    return f"{m.group(1)}.{m.group(2)}" if m else None
+
+for line in open(wc, encoding="utf-8", errors="replace"):
+    dm = re.search(r"DOMAIN='([^']+)'", line)
+    bm = re.search(r"BACKEND='([^']*)'", line)
+    if not dm or not bm:
+        continue
+    domain, backend = dm.group(1), bm.group(1)
+    ver = php_ver(backend)
+    if not ver or ver not in remap:
+        continue
+    new_ver = remap[ver]
+    new_backend = f"PHP-{new_ver.replace('.', '_')}"
+    print(f"remap {domain}: {backend} -> {new_backend}")
+    subprocess.run(
+        ["/usr/local/hestia/bin/v-change-web-domain-backend-tpl", user, domain, new_backend],
+        check=False,
+    )
+PY
+fi
+
+# Verify php-fpm runtimes for remaining backends
+python3 - "$user" <<'PY' >"$jdir/php-check.log" 2>&1 || true
+import os, re, sys
+user = sys.argv[1]
+wc = f"/usr/local/hestia/data/users/{user}/web.conf"
+if not os.path.isfile(wc):
+    sys.exit(0)
+missing = []
+for line in open(wc, encoding="utf-8", errors="replace"):
+    bm = re.search(r"BACKEND='([^']*)'", line)
+    if not bm:
+        continue
+    m = re.search(r"PHP[-_]?(\d+)[._](\d+)", bm.group(1) or "", re.I)
+    if not m:
+        continue
+    ver = f"{m.group(1)}.{m.group(2)}"
+    if not (os.path.isdir(f"/etc/php/{ver}/fpm") or os.path.isfile(f"/etc/init.d/php{ver}-fpm")):
+        missing.append(ver)
+if missing:
+    print("missing runtimes after restore: " + ",".join(sorted(set(missing))))
+    sys.exit(1)
+print("php runtimes ok")
+PY
+php_check_rc=$?
+if [[ "$php_check_rc" -ne 0 ]]; then
+	fail_job "PHP runtime still missing after restore; see job php-check.log (install/remap required)"
+fi
+
 /usr/local/hestia/bin/v-update-user-counters "$user" >/dev/null 2>&1 || true
 /usr/local/hestia/bin/v-rebuild-user "$user" yes >/dev/null 2>&1 || true
 

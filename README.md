@@ -3,7 +3,7 @@
 
 **User import module for [Hestia Control Panel](https://hestiacp.com/)** — migrate accounts from one Hestia server to another without manual backup / scp / restore in a terminal.
 
-Latest release: **Version 1.2.5**
+Latest release: **Version 1.2.6**
 
 Please go easy on this project — this is my first publicly shared code. I built it for myself because backing up and moving Hestia users only through the terminal was painfully inconvenient. The module is meant simply to make transferring users between your own Hestia servers easier. If it’s useful to anyone else, I’m glad. Contributions and improvements are very welcome.
 
@@ -70,7 +70,7 @@ apt-get update && apt-get install -y ca-certificates curl
 ### Step 3: Open the panel
 
 - **Users → Import user**, or open `/migrate/`
-- Enable / disable the module under **Settings → Configure → Plugins → User Import (Hestia↔Hestia)** (Yes / No)
+- The module is **enabled by default** after `install.sh` (Users toolbar shows **Import user**). Turn it off under **Settings → Configure → Plugins → User Import (Hestia↔Hestia)** if you do not need it.
 
 ---
 
@@ -97,7 +97,7 @@ cd hestia-migrate
 bash install.sh
 ```
 
-Pin a specific version if needed: `.../download/hestia-migrate-1.2.5.zip`
+Pin a specific version if needed: `.../download/hestia-migrate-1.2.6.zip`
 
 `install.sh` / `install-remote.sh` install **`sshpass` and the other required packages** automatically. Without `sshpass`, Connect cannot reliably push a temporary SSH key to the source server.
 
@@ -131,7 +131,17 @@ echo -n "github:    "; curl -fsSL https://raw.githubusercontent.com/fastservicep
 
 If `github` is newer than `installed`, run the upgrade command above.
 
-`install.sh` is idempotent: it refreshes files, sudoers, the Users button, and the Plugins Yes/No control. After a Hestia package upgrade, `/etc/hestiacp/hooks/post_install.sh` re-applies the UI patches automatically.
+`install.sh` is idempotent: it refreshes files, sudoers, the Users button, and the Plugins Yes/No control. **Re-running install also turns User Import on** (unless you disable it again in Plugins). After a Hestia package upgrade, `/etc/hestiacp/hooks/post_install.sh` re-applies the UI patches automatically.
+
+---
+
+## PHP versions before import (1.2.6+)
+
+Analysis compares each account’s PHP-FPM **backend** (e.g. `PHP-8_3`) with runtimes actually present under `/etc/php/*/fpm`, not merely what is ticked in **Server settings → Configure → MultiPHP**. Those checkboxes only mirror domain backends in the panel; they do **not** prove that `php8.3-fpm` packages exist.
+
+When a required PHP version can be installed on this Hestia build, the wizard offers **Install the listed PHP versions…** and runs `v-add-web-php` once for the whole batch **before** the first `v-backup-user`. When a version is too old for your Hestia (e.g. PHP 5.6 on a new server), choose a **remap target** per version; domains are switched with `v-change-web-domain-backend-tpl` after restore.
+
+Order of operations: **Analyze → confirm PHP install/remap → prep (`v-migrate-prep-php`) → sequential user transfer**.
 
 ---
 
@@ -170,8 +180,8 @@ Uninstall wipes any remaining temporary SSH keys first.
 
 1. **Server** — hostname/IP, SSH port, login, password  
 2. **Users** — multi-select accounts on the source  
-3. **Analysis** — verdict `ok` / `warn` / `blocked`  
-4. **Transfer** — backup → stream → restore; LE held until DNS is ready  
+3. **Analysis** — verdict `ok` / `warn` / `blocked`; batch summary of PHP versions to install or remap  
+4. **Transfer** — optional PHP prep → backup → stream → restore; LE held until DNS is ready  
 5. **Repair** — finish partial imports from the local archive  
 6. **DNS** — probe domains on the new IP; checklist for registrar A records  
 7. **History** — list past jobs; **Delete** removes history + leftover `/backup` archive (does **not** delete the Hestia user)
@@ -185,7 +195,9 @@ v-migrate-connect HOST [PORT] PASSWORD_FILE [SSH_USER]
 v-migrate-list-users SESSION
 v-migrate-analyze SESSION USER
 v-migrate-start SESSION USER [yes]
-v-migrate-start-batch SESSION yes|no USER [USER…]
+v-migrate-start-batch SESSION yes|no yes|no INSTALL_PHP REMAP_PHP USER [USER…]
+v-migrate-prep-php VERSION [VERSION…]
+v-migrate-batch-status [BATCH_ID]
 v-migrate-status JOB
 v-migrate-list-jobs [LIMIT]
 v-migrate-inspect-job JOB

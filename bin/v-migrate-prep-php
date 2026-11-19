@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# info: install missing PHP-FPM versions via official Hestia multiphp before import
+# options: VERSION [VERSION...]
+#
+# Uses v-add-web-php for each missing version, then verifies php-fpm is present.
+# Already-installed versions are skipped. Writes JSON summary to stdout.
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+[[ $# -ge 1 ]] || die_json 2 "at least one PHP VERSION required (e.g. 8.3)"
+
+export PATH=$PATH:/usr/local/hestia/bin
+
+results=()
+failed=0
+
+batch_progress_file=${MIGRATE_BATCH_PROGRESS-}
+
+write_progress() {
+	local pct=$1
+	local msg=$2
+	[[ -n "$batch_progress_file" ]] || return 0
+	printf '{"stage":"prep_php","percent":%s,"message":"%s","updated":"%s"}\n' \
+		"$pct" "$(json_escape "$msg")" "$(date -Is)" >"$batch_progress_file"
+}
+
+runtime_ok() {
+	local ver=$1
+	[[ -d "/etc/php/$ver/fpm" ]] || [[ -f "/etc/init.d/php${ver}-fpm" ]]
+}
+
+stock_tpl() {
+	local ver=$1
+	echo "PHP-${ver/./_}"
+}
+
+i=0
+total=$#
+for ver in "$@"; do
+	i=$((i + 1))
+	[[ "$ver" =~ ^[0-9]+\.[0-9]+$ ]] || {
+		results+=("{\"version\":\"$(json_escape "$ver")\",\"ok\":false,\"error\":\"invalid version\"}")
+		failed=1
+		continue
+	}
+	pct=$((5 + (i - 1) * 80 / total))
+	if runtime_ok "$ver" && [[ -f "/usr/local/hestia/data/templates/web/php-fpm/$(stock_tpl "$ver").tpl" ]]; then
+		write_progress "$pct" "PHP $ver already installed"
+		results+=("{\"version\":\"$(json_escape "$ver")\",\"ok\":true,\"action\":\"skipped\",\"message\":\"already installed\"}")
+		continue
+	fi
+	write_progress "$pct" "Installing PHP $ver via v-add-web-php"
+	logf=$(mktemp)
+	if /usr/local/hestia/bin/v-add-web-php "$ver" >"$logf" 2>&1; then
+		:
+	else
+		# v-add-web-php exits non-zero when already installed — treat as OK if runtime present
+		if ! runtime_ok "$ver"; then
+			detail=$(tail -n 12 "$logf" | tr '\n' ' ' | head -c 300)
+			results+=("{\"version\":\"$(json_escape "$ver")\",\"ok\":false,\"action\":\"install\",\"error\":\"$(json_escape "${detail:-v-add-web-php failed}")\"}")
+			failed=1
+			rm -f "$logf"
+			continue
+		fi
+	fi
+	rm -f "$logf"
+
+	# Ensure service is enabled/running
+	systemctl enable "php${ver}-fpm" >/dev/null 2>&1 || true
+	systemctl restart "php${ver}-fpm" >/dev/null 2>&1 || service "php${ver}-fpm" restart >/dev/null 2>&1 || true
+
+	if ! runtime_ok "$ver"; then
+		results+=("{\"version\":\"$(json_escape "$ver")\",\"ok\":false,\"action\":\"verify\",\"error\":\"php${ver}-fpm not present after install\"}")
+		failed=1
+		continue
+	fi
+	# Brief active check (non-fatal if systemd unit name differs)
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl is-active --quiet "php${ver}-fpm" 2>/dev/null || true
+	fi
+	results+=("{\"version\":\"$(json_escape "$ver")\",\"ok\":true,\"action\":\"installed\",\"message\":\"runtime ready\"}")
+done
+
+write_progress 95 "PHP prep finished"
+
+# Build JSON array
+printf '{"ok":%s,"versions":[' "$([[ "$failed" -eq 0 ]] && echo true || echo false)"
+first=1
+for r in "${results[@]+"${results[@]}"}"; do
+	[[ -n "$r" ]] || continue
+	[[ "$first" -eq 1 ]] || printf ','
+	first=0
+	printf '%s' "$r"
+done
+printf ']}\n'
+
+[[ "$failed" -eq 0 ]]

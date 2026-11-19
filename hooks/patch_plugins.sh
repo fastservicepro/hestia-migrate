@@ -16,6 +16,14 @@ if [[ -f "$CONF" ]]; then
 		sed -i "s/^HESTIA_MIGRATE='yes'/HESTIA_MIGRATE='true'/" "$CONF" || true
 		sed -i 's/^HESTIA_MIGRATE="yes"/HESTIA_MIGRATE="true"/' "$CONF" || true
 	fi
+	# Fresh module install / upgrade: enable plugin (user can still set No in Settings → Plugins).
+	if [[ "${HESTIA_MIGRATE_ENABLE_DEFAULT:-}" == "1" ]]; then
+		if [[ -x /usr/local/hestia/bin/v-change-sys-config-value ]]; then
+			/usr/local/hestia/bin/v-change-sys-config-value HESTIA_MIGRATE true >/dev/null 2>&1 || true
+		else
+			sed -i "s/^HESTIA_MIGRATE=.*/HESTIA_MIGRATE='true'/" "$CONF" 2>/dev/null || true
+		fi
+	fi
 fi
 
 python3 - "$EDIT_SERVER" <<'PY'
@@ -30,10 +38,10 @@ snippet = '''\t\t\t\t\t<!-- hestia-migrate-plugin -->
 \t\t\t\t\t\t\t<?= tohtml( _("User Import (Hestia↔Hestia)")) ?>
 \t\t\t\t\t\t</label>
 \t\t\t\t\t\t<select class="form-select" name="v_hestia_migrate" id="v_hestia_migrate">
-\t\t\t\t\t\t\t<option value="false">
+\t\t\t\t\t\t\t<option value="false" <?= tohtml((($_SESSION["HESTIA_MIGRATE"] ?? "true") === "false") ? "selected" : "") ?>>
 \t\t\t\t\t\t\t\t<?= tohtml( _("No")) ?>
 \t\t\t\t\t\t\t</option>
-\t\t\t\t\t\t\t<option value="true" <?= tohtml((($_SESSION["HESTIA_MIGRATE"] ?? "") === "true" || ($_SESSION["HESTIA_MIGRATE"] ?? "") === "yes") ? "selected" : "") ?>>
+\t\t\t\t\t\t\t<option value="true" <?= tohtml((($_SESSION["HESTIA_MIGRATE"] ?? "true") === "true" || ($_SESSION["HESTIA_MIGRATE"] ?? "") === "yes") ? "selected" : "") ?>>
 \t\t\t\t\t\t\t\t<?= tohtml( _("Yes")) ?>
 \t\t\t\t\t\t\t</option>
 \t\t\t\t\t\t</select>

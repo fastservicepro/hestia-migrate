@@ -7,7 +7,7 @@ analyze_pair() {
 	local sdir
 	sdir=$(session_dir "$session")
 	python3 - "$sdir/local.json" "$sdir/remote.json" "$sdir/user-$user.json" "$user" <<'PY'
-import json, sys, os
+import json, sys, os, re
 
 local = json.loads(open(sys.argv[1], encoding="utf-8").read())
 remote = json.loads(open(sys.argv[2], encoding="utf-8").read())
@@ -153,25 +153,141 @@ if user.get("extra_dirs"):
         "notes": user.get("extra_dirs"),
     })
 
-local_php = set(filter(None, (local.get("php_backends") or "").split(",")))
-local_php |= set(filter(None, (local.get("php_versions") or "").split(",")))
-for b in filter(None, (user.get("backends") or "").split(",")):
-    if b and b != "default":
-        ok = b in local_php or any(b.replace("_", ".") in p or p in b for p in local_php)
-        if not ok:
-            warnings.append(
-                f"PHP backend '{b}' may be missing; template will be copied if present, else default."
-            )
+def php_version_from_backend(backend):
+    if not backend or backend == "default":
+        return None
+    m = re.search(r"PHP[-_]?(\d+)[._](\d+)", backend, re.I)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+    return None
 
+def stock_php_tpl(ver):
+    return f"PHP-{ver.replace('.', '_')}"
+
+def load_multiphp_supported():
+    path = "/usr/local/hestia/install/upgrade/upgrade.conf"
+    supported = set()
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return {"5.6", "7.0", "7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+    m = re.search(r"multiphp_v\s*=\s*\(([^)]*)\)", text)
+    if m:
+        for part in re.findall(r'"([^"]+)"', m.group(1)):
+            supported.add(part)
+    return supported or {"8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+
+def runtime_present(ver):
+    if os.path.isdir(f"/etc/php/{ver}/fpm"):
+        return True
+    if os.path.isfile(f"/etc/init.d/php{ver}-fpm"):
+        return True
+    # Panel probe may list bare versions under php_versions
+    for p in filter(None, (local.get("php_versions") or "").split(",")):
+        if p == ver or p.startswith(ver):
+            return True
+    return False
+
+def template_present(name):
+    if not name:
+        return True
+    base = "/usr/local/hestia/data/templates/web/php-fpm"
+    return os.path.isfile(f"{base}/{name}.tpl")
+
+supported_php = load_multiphp_supported()
+installed_php = sorted({
+    p for p in filter(None, (local.get("php_versions") or "").split(","))
+    if re.match(r"^\d+\.\d+", p)
+})
+# Also detect from /etc/php
+if os.path.isdir("/etc/php"):
+    for name in os.listdir("/etc/php"):
+        if re.match(r"^\d+\.\d+$", name) and os.path.isdir(f"/etc/php/{name}/fpm"):
+            if name not in installed_php:
+                installed_php.append(name)
+installed_php = sorted(set(installed_php), key=lambda v: ver_tuple(v))
+
+php_items = []
+seen_backends = set()
+for b in filter(None, (user.get("backends") or "").split(",")):
+    if b in seen_backends:
+        continue
+    seen_backends.add(b)
+    ver = php_version_from_backend(b)
+    tpl_ok = template_present(b) or (ver and template_present(stock_php_tpl(ver)))
+    if not ver:
+        php_items.append({
+            "backend": b,
+            "version": "",
+            "runtime": "n/a",
+            "template": "present" if template_present(b) else "missing",
+            "installable": False,
+            "action": "ok" if template_present(b) else "template_missing",
+        })
+        if not template_present(b):
+            warnings.append(f"Web template/backend '{b}' missing locally; will copy from source if present.")
+        continue
+    rt_ok = runtime_present(ver)
+    installable = ver in supported_php
+    if rt_ok:
+        action = "ok"
+        if not tpl_ok:
+            action = "template_missing"
+            warnings.append(
+                f"PHP {ver} runtime is installed but backend template '{b}' is missing; "
+                f"will copy from source if present."
+            )
+    elif installable:
+        action = "needs_install"
+        warnings.append(
+            f"PHP {ver} runtime is not installed (backend '{b}'). "
+            f"Confirm software install before import, or remap to an installed version."
+        )
+    else:
+        action = "needs_remap"
+        warnings.append(
+            f"PHP {ver} is required by backend '{b}' but cannot be installed on this Hestia build "
+            f"and is not present. You must remap it to an installed PHP before import."
+        )
+    php_items.append({
+        "backend": b,
+        "version": ver,
+        "runtime": "present" if rt_ok else "missing",
+        "template": "present" if tpl_ok else "missing",
+        "installable": installable and not rt_ok,
+        "action": action,
+    })
+
+packages_to_copy = []
 pkg = user.get("package")
 if pkg and not os.path.isfile(f"/usr/local/hestia/data/packages/{pkg}.pkg"):
+    packages_to_copy.append(pkg)
     warnings.append(f"Package '{pkg}' missing locally; will be copied from source.")
+
+templates_to_copy = sorted({
+    item["backend"] for item in php_items
+    if item.get("template") == "missing" and item.get("backend")
+})
+
+software = {
+    "php": php_items,
+    "php_installed": installed_php,
+    "php_supported": sorted(supported_php, key=lambda v: ver_tuple(v)),
+    "packages_to_copy": packages_to_copy,
+    "templates_to_copy": templates_to_copy,
+    "needs_install": sorted({i["version"] for i in php_items if i.get("action") == "needs_install"}),
+    "needs_remap": sorted({i["version"] for i in php_items if i.get("action") == "needs_remap"}),
+}
 
 if user.get("twofa"):
     warnings.append("2FA secret migrates with user.conf; keep authenticator app.")
 
 warnings.append("Let's Encrypt stays off until you confirm DNS points here.")
 warnings.append("Source account is left running until you change DNS at the registrar.")
+warnings.append(
+    "MultiPHP checkboxes in Server settings reflect domain backends after import; "
+    "they are not proof that PHP packages are installed."
+)
 
 verdict = "blocked" if errors else ("warn" if warnings else "ok")
 print(json.dumps({
@@ -184,6 +300,7 @@ print(json.dumps({
     "plan": plan,
     "errors": errors,
     "warnings": warnings,
+    "software": software,
     "disk_required_mb": need,
     "disk_free_mb": free,
 }, ensure_ascii=False))

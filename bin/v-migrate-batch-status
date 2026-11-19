@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# info: read batch progress JSON for panel polling
+# options: [BATCH_ID]
+set -euo pipefail
+source /usr/local/hestia-migrate/lib/common.sh
+require_root
+
+batch_id=${1-}
+if [[ -z "$batch_id" && -f "$MIGRATE_DATA/jobs/last-batch-id" ]]; then
+	batch_id=$(cat "$MIGRATE_DATA/jobs/last-batch-id")
+fi
+[[ -n "$batch_id" ]] || die_json 2 "BATCH_ID required"
+[[ "$batch_id" =~ ^[A-Za-z0-9._-]+$ ]] || die_json 2 "invalid batch id"
+
+python3 - "$MIGRATE_DATA/jobs" "$batch_id" <<'PY'
+import json, os, sys
+
+jobs, batch_id = sys.argv[1], sys.argv[2]
+progress_path = os.path.join(jobs, f"batch-{batch_id}.progress.json")
+prep_path = os.path.join(jobs, f"batch-{batch_id}.prep.json")
+log_path = os.path.join(jobs, f"batch-{batch_id}.log")
+pid_path = os.path.join(jobs, f"batch-{batch_id}.pid")
+
+progress = {}
+if os.path.isfile(progress_path):
+    try:
+        progress = json.load(open(progress_path, encoding="utf-8"))
+    except Exception:
+        progress = {}
+
+prep = {}
+if os.path.isfile(prep_path):
+    try:
+        prep = json.load(open(prep_path, encoding="utf-8"))
+    except Exception:
+        prep = {"raw": open(prep_path, encoding="utf-8", errors="replace").read()[:2000]}
+
+pid = ""
+running = False
+if os.path.isfile(pid_path):
+    pid = open(pid_path, encoding="utf-8").read().strip()
+    if pid.isdigit():
+        try:
+            os.kill(int(pid), 0)
+            running = True
+        except OSError:
+            running = False
+
+log_tail = ""
+if os.path.isfile(log_path):
+    lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
+    log_tail = " ".join(lines[-20:])[:800]
+
+print(json.dumps({
+    "ok": True,
+    "batch_id": batch_id,
+    "stage": progress.get("stage", "unknown"),
+    "percent": int(progress.get("percent") or 0),
+    "message": progress.get("message") or "",
+    "updated": progress.get("updated") or "",
+    "user": progress.get("user") or "",
+    "running": running,
+    "pid": pid,
+    "prep": prep,
+    "log_tail": log_tail,
+}))
+PY

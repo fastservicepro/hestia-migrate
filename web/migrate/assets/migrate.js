@@ -7,6 +7,8 @@
 	let selectedUsers = [];
 	let batchResults = [];
 	let batchJobs = {};
+	let batchSoftware = { needs_install: [], needs_remap: [], php_installed: [], by_version: {} };
+	let batchId = "";
 	let historyJobs = [];
 
 	const $ = (sel) => document.querySelector(sel);
@@ -329,8 +331,98 @@
 			return;
 		}
 		batchResults = data.results || [];
+		batchSoftware = data.software || {
+			needs_install: [],
+			needs_remap: [],
+			php_installed: [],
+			by_version: {},
+		};
 		renderBatchResults();
 	});
+
+	function softwareReady() {
+		const needInstall = batchSoftware.needs_install || [];
+		const needRemap = batchSoftware.needs_remap || [];
+		if (needInstall.length && !$("#hmig-accept-sw")?.checked) return false;
+		for (const ver of needRemap) {
+			const sel = document.querySelector(`.hmig-remap[data-from="${ver}"]`);
+			if (!sel || !sel.value) return false;
+		}
+		return true;
+	}
+
+	function syncStartEnabled() {
+		const blocked = batchResults.filter((r) => r.verdict === "blocked");
+		const warn = batchResults.filter((r) => r.verdict === "warn");
+		const ok = batchResults.filter((r) => r.verdict === "ok");
+		const start = $("#hmig-start");
+		const accept = $("#hmig-accept");
+		if (blocked.length) {
+			start.disabled = true;
+			return;
+		}
+		const importable = ok.length + warn.length;
+		if (!importable) {
+			start.disabled = true;
+			return;
+		}
+		const warnOk = !warn.length || accept.checked;
+		start.disabled = !(warnOk && softwareReady());
+	}
+
+	function renderSoftwareBox() {
+		const box = $("#hmig-software-box");
+		const swWrap = $("#hmig-accept-sw-wrap");
+		const swCb = $("#hmig-accept-sw");
+		const needInstall = batchSoftware.needs_install || [];
+		const needRemap = batchSoftware.needs_remap || [];
+		const installed = batchSoftware.php_installed || [];
+		const byVer = batchSoftware.by_version || {};
+		if (!needInstall.length && !needRemap.length) {
+			box.hidden = true;
+			box.innerHTML = "";
+			swWrap.hidden = true;
+			swCb.checked = false;
+			return;
+		}
+		box.hidden = false;
+		const lines = [];
+		lines.push(`<h3><i class="fas fa-puzzle-piece"></i> Software required before import</h3>`);
+		lines.push(
+			`<p class="u-text-small">PHP packages are installed with Hestia <code>v-add-web-php</code> before any backup starts. MultiPHP checkboxes in Server settings only reflect domain backends — not whether packages exist.</p>`
+		);
+		if (installed.length) {
+			lines.push(`<p>Already on this server: <strong>${esc(installed.join(", "))}</strong></p>`);
+		}
+		if (needInstall.length) {
+			lines.push(`<p><strong>Will install:</strong></p><ul>`);
+			for (const ver of needInstall) {
+				const users = (byVer[ver]?.users || []).join(", ");
+				lines.push(`<li>PHP ${esc(ver)}${users ? ` — needed by ${esc(users)}` : ""}</li>`);
+			}
+			lines.push(`</ul>`);
+		}
+		if (needRemap.length) {
+			const opts = installed.length
+				? installed.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("")
+				: `<option value="">(no PHP installed — install one in Hestia first)</option>`;
+			lines.push(`<p><strong>Cannot install — remap required:</strong></p><ul>`);
+			for (const ver of needRemap) {
+				const users = (byVer[ver]?.users || []).join(", ");
+				lines.push(
+					`<li>PHP ${esc(ver)}${users ? ` (${esc(users)})` : ""} → <select class="form-select hmig-remap" data-from="${esc(
+						ver
+					)}"><option value="">Choose target…</option>${opts}</select></li>`
+				);
+			}
+			lines.push(`</ul>`);
+		}
+		box.innerHTML = lines.join("");
+		swWrap.hidden = needInstall.length === 0;
+		swCb.checked = false;
+		swCb.onchange = syncStartEnabled;
+		box.querySelectorAll(".hmig-remap").forEach((sel) => sel.addEventListener("change", syncStartEnabled));
+	}
 
 	function renderBatchResults() {
 		const blocked = batchResults.filter((r) => r.verdict === "blocked");
@@ -339,11 +431,17 @@
 		$("#hmig-batch-summary").textContent =
 			`Ready: ${ok.length} · Warnings: ${warn.length} · Blocked: ${blocked.length} · Selected: ${batchResults.length}`;
 
+		renderSoftwareBox();
+
 		$("#hmig-batch-results").innerHTML = batchResults
 			.map((r) => {
 				const u = r.user || r.composition?.user || "?";
 				const v = r.verdict || "blocked";
 				const comp = r.composition || {};
+				const sw = r.software || {};
+				const phpLine = (sw.php || [])
+					.map((p) => `${p.backend || "?"} → PHP ${p.version || "?"} [${p.action || "?"}]`)
+					.join("; ");
 				const plan = (r.plan || []).map((p) => `• ${p.object}: ${p.method}`).join("\n");
 				const errs = (r.errors || []).map((e) => `✗ ${e}`).join("\n");
 				const warns = (r.warnings || []).map((e) => `! ${e}`).join("\n");
@@ -351,7 +449,9 @@
 					<h3><i class="fas fa-user"></i> ${esc(u)} — ${esc(v)}</h3>
 					<pre class="hmig-box">${esc(
 						`Package ${comp.package || ""} · home ${comp.home_mb || 0} MB · hash ${comp.hash_type || ""}\n` +
-							`Web=${(comp.web || []).length} DB=${(comp.db || []).length} Mail=${(comp.mail || []).length} DNS=${(comp.dns || []).length} Cron=${comp.cron_jobs || 0}\n\n` +
+							`Web=${(comp.web || []).length} DB=${(comp.db || []).length} Mail=${(comp.mail || []).length} DNS=${(comp.dns || []).length} Cron=${comp.cron_jobs || 0}\n` +
+							(phpLine ? `PHP: ${phpLine}\n` : "") +
+							`\n` +
 							(plan || "(no plan)") +
 							(errs ? "\n\nErrors:\n" + errs : "") +
 							(warns ? "\n\nWarnings:\n" + warns : "")
@@ -367,21 +467,19 @@
 		const start = $("#hmig-start");
 		const accept = $("#hmig-accept");
 		accept.checked = false;
+		accept.onchange = syncStartEnabled;
 		if (blocked.length) {
 			acceptWrap.hidden = true;
 			start.disabled = true;
 			start.textContent = "Fix blocked users first";
 		} else if (warn.length) {
 			acceptWrap.hidden = false;
-			start.disabled = true;
 			start.innerHTML = `<i class="fas fa-people-arrows"></i> Import ${ok.length + warn.length} user(s)`;
-			accept.onchange = () => {
-				start.disabled = !accept.checked;
-			};
+			syncStartEnabled();
 		} else {
 			acceptWrap.hidden = true;
-			start.disabled = ok.length === 0;
 			start.innerHTML = `<i class="fas fa-people-arrows"></i> Import ${ok.length} user(s)`;
+			syncStartEnabled();
 		}
 	}
 
@@ -393,15 +491,28 @@
 			.map((r) => r.user || r.composition?.user)
 			.filter(Boolean);
 		if (!importable.length) return;
+		if (!softwareReady()) {
+			alert("Confirm PHP install and/or choose remap targets before starting.");
+			return;
+		}
 		setStep(4);
 		$("#hmig-bar").style.width = "5%";
 		$("#hmig-progress-msg").textContent = `Starting import of ${importable.length} user(s)…`;
 		$("#hmig-goto-repair").hidden = true;
 		const accept = $("#hmig-accept").checked ? "yes" : "no";
+		const acceptSw = $("#hmig-accept-sw")?.checked ? "yes" : "no";
+		const installPhp = (batchSoftware.needs_install || []).join(",");
+		const remapParts = [];
+		document.querySelectorAll(".hmig-remap").forEach((sel) => {
+			if (sel.dataset.from && sel.value) remapParts.push(`${sel.dataset.from}:${sel.value}`);
+		});
 		const data = await api("transfer_batch", {
 			session,
 			users: importable,
 			accept_warnings: accept,
+			accept_software: acceptSw,
+			install_php: installPhp || "none",
+			remap_php: remapParts.join(",") || "none",
 		});
 		$("#hmig-progress-log").textContent = JSON.stringify(data, null, 2);
 		if (!data.ok) {
@@ -409,15 +520,47 @@
 			return;
 		}
 		jobId = data.first_job || "";
+		batchId = data.batch_id || "";
 		await pollBatch(importable);
 	});
 
 	async function pollBatch(users) {
 		for (;;) {
+			let batchSt = null;
+			if (batchId) {
+				batchSt = await api("batch_status", { batch: batchId }, "GET");
+				if (batchSt?.ok) {
+					const bp = Number(batchSt.percent) || 0;
+					if (batchSt.stage === "prep" || batchSt.stage === "prep_php" || batchSt.stage === "queued") {
+						$("#hmig-bar").style.width = `${Math.max(5, bp)}%`;
+						$("#hmig-progress-msg").textContent = batchSt.message || "Preparing software…";
+						$("#hmig-job-cards").innerHTML = `<div class="hmig-card">… ${esc(
+							batchSt.message || "Installing PHP / preparing batch"
+						)}</div>`;
+						if (batchSt.prep && Object.keys(batchSt.prep).length) {
+							$("#hmig-progress-log").textContent = JSON.stringify(batchSt.prep, null, 2);
+						}
+						if (batchSt.stage === "failed") {
+							$("#hmig-progress-msg").textContent = batchSt.message || "Batch failed during prep";
+							$("#hmig-goto-repair").hidden = false;
+							return;
+						}
+						await new Promise((r) => setTimeout(r, 2000));
+						continue;
+					}
+					if (batchSt.stage === "failed") {
+						$("#hmig-progress-msg").textContent = batchSt.message || "Batch failed";
+						$("#hmig-progress-log").textContent = batchSt.log_tail || JSON.stringify(batchSt, null, 2);
+						$("#hmig-goto-repair").hidden = false;
+						return;
+					}
+				}
+			}
+
 			const map = await api("jobs_for_users", { users }, "GET");
 			if (map && map.ok === false) {
 				$("#hmig-progress-msg").textContent =
-					map.error || "Cannot read job status (sudo / jobs-for-users). Reinstall hestia-migrate 1.2.5+.";
+					map.error || "Cannot read job status (sudo / jobs-for-users). Reinstall hestia-migrate 1.2.6+.";
 				$("#hmig-progress-log").textContent = JSON.stringify(map, null, 2);
 			}
 			batchJobs = map.jobs || {};
@@ -426,12 +569,15 @@
 			let failed = 0;
 			let running = 0;
 			let activeUser = null;
+			const jobCount = Object.keys(batchJobs).length;
 			for (const u of users) {
 				const jid = batchJobs[u];
 				if (!jid) {
-					cards.push(
-						`<div class="hmig-card">⏳ <strong>${esc(u)}</strong> · queued · waiting for previous user (batch is sequential)</div>`
-					);
+					const qmsg =
+						batchSt && (batchSt.stage === "prep_done" || batchSt.stage === "transfer")
+							? "queued · waiting for previous user (batch is sequential)"
+							: "queued · waiting for software prep / previous user";
+					cards.push(`<div class="hmig-card">⏳ <strong>${esc(u)}</strong> · ${qmsg}</div>`);
 					running++;
 					continue;
 				}
@@ -461,12 +607,22 @@
 			);
 			const total = users.length;
 			const pctAll = Math.round(((done + failed) / total) * 100);
-			$("#hmig-bar").style.width = `${Math.max(5, pctAll || (activeUser ? 20 : 5))}%`;
+			const batchPct = Number(batchSt?.percent) || 0;
+			$("#hmig-bar").style.width = `${Math.max(5, pctAll || batchPct || (activeUser ? 20 : 5))}%`;
 			$("#hmig-progress-msg").textContent = activeUser
 				? `Running ${activeUser} · Done ${done}/${total} · Failed ${failed} · Queued ${Math.max(0, running - 1)}`
-				: `Done ${done}/${total} · Failed ${failed} · Running/queued ${running}`;
+				: jobCount === 0 && batchSt?.message
+					? batchSt.message
+					: `Done ${done}/${total} · Failed ${failed} · Running/queued ${running}`;
 			if (failed) $("#hmig-goto-repair").hidden = false;
-			if (done + failed >= total) {
+
+			const batchDone = batchSt && !batchSt.running && (batchSt.stage === "done" || batchSt.stage === "failed");
+			if (done + failed >= total && (jobCount >= total || batchDone)) {
+				if (batchSt?.stage === "failed" && done + failed < total) {
+					$("#hmig-progress-msg").textContent = batchSt.message || "Batch failed";
+					$("#hmig-goto-repair").hidden = false;
+					return;
+				}
 				await wipeSessionKeys("Import finished — wiping temporary SSH keys.");
 				await loadHistory();
 				if (failed === 0) {
@@ -475,6 +631,12 @@
 				} else {
 					$("#hmig-progress-msg").textContent += " — open Repair to finish incomplete accounts.";
 				}
+				return;
+			}
+			if (batchDone && jobCount === 0) {
+				$("#hmig-progress-msg").textContent = batchSt.message || "Batch ended before jobs started";
+				$("#hmig-progress-log").textContent = batchSt.log_tail || JSON.stringify(batchSt, null, 2);
+				$("#hmig-goto-repair").hidden = false;
 				return;
 			}
 			await new Promise((r) => setTimeout(r, 2000));

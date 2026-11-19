@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# info: start transfers for multiple users sequentially in background
-# options: SESSION ACCEPT_WARNINGS USER [USER...]
+# info: prep PHP (optional) then transfer users sequentially in background
+# options: SESSION ACCEPT_WARNINGS ACCEPT_SOFTWARE INSTALL_PHP REMAP_PHP USER [USER...]
 #
-# Runs v-migrate-transfer in the foreground for each user (one at a time) so
-# restores do not fight over disk/DB. The batch itself is backgrounded.
+# INSTALL_PHP: comma-separated versions (e.g. 8.3,8.4) or "-" / "none"
+# REMAP_PHP:   comma-separated from:to pairs (e.g. 8.2:8.5) or "-" / "none"
+#
+# Runs v-migrate-prep-php once for the batch, then v-migrate-transfer one user
+# at a time. Batch progress is written to batch-<id>.progress.json.
 set -euo pipefail
 source /usr/local/hestia-migrate/lib/common.sh
 require_root
 
 session=${1-}
 accept=${2:-no}
-shift 2 || true
+accept_sw=${3:-no}
+install_php=${4:--}
+remap_php=${5:--}
+shift 5 || true
 [[ -n "$session" ]] || die_json 2 "SESSION required"
 [[ $# -ge 1 ]] || die_json 2 "at least one USER required"
 [[ -d "$(session_dir "$session")" ]] || die_json 2 "unknown session"
@@ -21,20 +27,61 @@ chmod 700 "$MIGRATE_DATA/jobs"
 batch_id=$(date +%Y%m%d%H%M%S)
 jobs_file=$(mktemp)
 batch_log="$MIGRATE_DATA/jobs/batch-${batch_id}.log"
+batch_progress="$MIGRATE_DATA/jobs/batch-${batch_id}.progress.json"
+echo "$batch_id" >"$MIGRATE_DATA/jobs/last-batch-id"
+
+# Normalize lists
+if [[ "$install_php" == "-" || "$install_php" == "none" || -z "$install_php" ]]; then
+	install_php=""
+fi
+if [[ "$remap_php" == "-" || "$remap_php" == "none" || -z "$remap_php" ]]; then
+	remap_php=""
+fi
+
+printf '{"stage":"queued","percent":1,"message":"Batch queued","updated":"%s","batch_id":"%s"}\n' \
+	"$(date -Is)" "$batch_id" >"$batch_progress"
 
 {
 	echo "#!/bin/bash"
 	echo "set +e"
 	echo "SESSION=$(printf '%q' "$session")"
 	echo "ACCEPT=$(printf '%q' "$accept")"
+	echo "ACCEPT_SW=$(printf '%q' "$accept_sw")"
+	echo "REMAP_PHP=$(printf '%q' "$remap_php")"
+	echo "export MIGRATE_BATCH_PROGRESS=$(printf '%q' "$batch_progress")"
+	echo "export MIGRATE_REMAP_PHP=\"\$REMAP_PHP\""
 	echo "echo \"[batch $batch_id] start \$(date -Is)\""
+	echo "printf '{\"stage\":\"prep\",\"percent\":3,\"message\":\"Preparing software\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
+
+	if [[ -n "$install_php" ]]; then
+		if [[ "$accept_sw" != "yes" ]]; then
+			echo "echo \"[batch] refuse: PHP install requested without accept_software\""
+			echo "printf '{\"stage\":\"failed\",\"percent\":0,\"message\":\"PHP install requires software consent\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
+			echo "exit 5"
+		fi
+		# shellcheck disable=SC2086
+		echo "versions=\$(echo $(printf '%q' "$install_php") | tr ',' ' ')"
+		echo "echo \"[batch] prep PHP: \$versions\""
+		echo "/usr/local/hestia-migrate/bin/v-migrate-prep-php \$versions >$(printf '%q' "$MIGRATE_DATA/jobs/batch-${batch_id}.prep.json") 2>>$(printf '%q' "$batch_log")"
+		echo "prep_rc=\$?"
+		echo "if [[ \$prep_rc -ne 0 ]]; then"
+		echo "  echo \"[batch] PHP prep failed\""
+		echo "  printf '{\"stage\":\"failed\",\"percent\":0,\"message\":\"PHP prep failed — see batch prep.json / log\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
+		echo "  exit 6"
+		echo "fi"
+		echo "printf '{\"stage\":\"prep_done\",\"percent\":12,\"message\":\"PHP ready — starting transfers\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
+	else
+		echo "printf '{\"stage\":\"prep_done\",\"percent\":8,\"message\":\"No PHP install needed\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
+	fi
+
 	for u in "$@"; do
 		echo "echo \"[batch] starting user $(printf '%q' "$u")\""
-		# Foreground transfer — wait until finished before next user
+		echo "printf '{\"stage\":\"transfer\",\"percent\":15,\"message\":\"Transferring $(printf '%q' "$u")\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\",\"user\":\"$(printf '%q' "$u")\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
 		echo "/usr/local/hestia-migrate/bin/v-migrate-transfer \"\$SESSION\" $(printf '%q' "$u") \"\$ACCEPT\""
 		echo "rc=\$?"
 		echo "echo \"[batch] user $(printf '%q' "$u") exit \$rc\""
 	done
+	echo "printf '{\"stage\":\"done\",\"percent\":100,\"message\":\"Batch finished\",\"updated\":\"%s\",\"batch_id\":\"$batch_id\"}\\n' \"\$(date -Is)\" >$(printf '%q' "$batch_progress")"
 	echo "echo \"[batch $batch_id] done \$(date -Is)\""
 } >"$jobs_file"
 chmod 700 "$jobs_file"
@@ -43,24 +90,8 @@ nohup bash "$jobs_file" >"$batch_log" 2>&1 &
 pid=$!
 echo "$pid" >"$MIGRATE_DATA/jobs/batch-${batch_id}.pid"
 
-first_job=""
-first_user=$1
-for _ in $(seq 1 80); do
-	sleep 0.25
-	if ! kill -0 "$pid" 2>/dev/null; then
-		die_json 6 "batch exited before creating jobs; log: $(tail -n 30 "$batch_log" 2>/dev/null | tr '\n' ' ')"
-	fi
-	cand=$(ls -1dt "$MIGRATE_DATA/jobs/"*-"$first_user" 2>/dev/null | head -n1 || true)
-	if [[ -n "$cand" && -d "$cand" ]]; then
-		first_job=$(basename "$cand")
-		break
-	fi
-done
-
-if [[ -z "$first_job" ]]; then
-	die_json 6 "no job created for $first_user; pid=$pid log=$batch_log :: $(tail -n 40 "$batch_log" 2>/dev/null | tr '\n' ' ')"
-fi
-
+# Return quickly — do not wait for first user job (prep may take minutes)
 users_json=$(printf '%s\n' "$@" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
-printf '{"ok":true,"pid":%s,"first_job":"%s","batch_log":"%s","users":%s,"message":"batch started"}\n' \
-	"$pid" "$first_job" "$(json_escape "$batch_log")" "$users_json"
+install_json=$(python3 -c 'import json,sys; print(json.dumps([x for x in sys.argv[1].split(",") if x and x not in ("-","none")]))' "$install_php")
+printf '{"ok":true,"pid":%s,"batch_id":"%s","first_job":"","batch_log":"%s","batch_progress":"%s","users":%s,"install_php":%s,"message":"batch started"}\n' \
+	"$pid" "$batch_id" "$(json_escape "$batch_log")" "$(json_escape "$batch_progress")" "$users_json" "$install_json"

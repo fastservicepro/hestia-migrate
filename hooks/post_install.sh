@@ -24,6 +24,8 @@ for cmd in \
 	v-migrate-transfer \
 	v-migrate-start \
 	v-migrate-start-batch \
+	v-migrate-batch-status \
+	v-migrate-prep-php \
 	v-migrate-status \
 	v-migrate-verify \
 	v-migrate-inspect-job \

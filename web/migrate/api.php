@@ -104,6 +104,10 @@ switch ($action) {
 			exit();
 		}
 		$results = [];
+		$needs_install = [];
+		$needs_remap = [];
+		$php_installed = [];
+		$by_version = [];
 		foreach ($users as $u) {
 			[$rc, $raw, $json] = migrate_exec(
 				"$bin /usr/local/hestia/bin/v-migrate-analyze " .
@@ -111,9 +115,37 @@ switch ($action) {
 					" " .
 					escapeshellarg($u)
 			);
-			$results[] = $json ?: ["ok" => false, "user" => $u, "verdict" => "blocked", "error" => $raw, "code" => $rc];
+			$row = $json ?: ["ok" => false, "user" => $u, "verdict" => "blocked", "error" => $raw, "code" => $rc];
+			$results[] = $row;
+			$sw = is_array($row["software"] ?? null) ? $row["software"] : [];
+			foreach ($sw["php_installed"] ?? [] as $v) {
+				$php_installed[$v] = true;
+			}
+			foreach ($sw["needs_install"] ?? [] as $v) {
+				$needs_install[$v] = true;
+				$by_version[$v]["action"] = "needs_install";
+				$by_version[$v]["users"][] = $row["user"] ?? $u;
+			}
+			foreach ($sw["needs_remap"] ?? [] as $v) {
+				$needs_remap[$v] = true;
+				$by_version[$v]["action"] = "needs_remap";
+				$by_version[$v]["users"][] = $row["user"] ?? $u;
+			}
 		}
-		echo json_encode(["ok" => true, "results" => $results]);
+		foreach ($by_version as $v => &$meta) {
+			$meta["users"] = array_values(array_unique($meta["users"] ?? []));
+		}
+		unset($meta);
+		echo json_encode([
+			"ok" => true,
+			"results" => $results,
+			"software" => [
+				"needs_install" => array_keys($needs_install),
+				"needs_remap" => array_keys($needs_remap),
+				"php_installed" => array_keys($php_installed),
+				"by_version" => $by_version,
+			],
+		]);
 		break;
 
 	case "transfer":
@@ -134,19 +166,53 @@ switch ($action) {
 		$users_raw = trim($_POST["users"] ?? "");
 		$users = array_values(array_filter(array_map("trim", preg_split('/[\s,]+/', $users_raw))));
 		$accept = ($_POST["accept_warnings"] ?? "") === "yes" ? "yes" : "no";
+		$accept_sw = ($_POST["accept_software"] ?? "") === "yes" ? "yes" : "no";
+		$install_php = trim($_POST["install_php"] ?? "");
+		$remap_php = trim($_POST["remap_php"] ?? "");
+		if ($install_php === "" || $install_php === "none") {
+			$install_php = "-";
+		}
+		if ($remap_php === "" || $remap_php === "none") {
+			$remap_php = "-";
+		}
 		if ($session === "" || !$users) {
 			echo json_encode(["ok" => false, "error" => "session and users required"]);
 			exit();
 		}
-		$cmd = "$bin /usr/local/hestia/bin/v-migrate-start-batch " . escapeshellarg($session) . " " . escapeshellarg($accept);
+		$cmd =
+			"$bin /usr/local/hestia/bin/v-migrate-start-batch " .
+			escapeshellarg($session) .
+			" " .
+			escapeshellarg($accept) .
+			" " .
+			escapeshellarg($accept_sw) .
+			" " .
+			escapeshellarg($install_php) .
+			" " .
+			escapeshellarg($remap_php);
 		foreach ($users as $u) {
 			$cmd .= " " . escapeshellarg($u);
 		}
 		[$rc, $raw, $json] = migrate_exec($cmd);
-		if (is_array($json) && !empty($json["first_job"])) {
-			$_SESSION["migrate_job"] = $json["first_job"];
+		if (is_array($json) && !empty($json["ok"])) {
+			if (!empty($json["first_job"])) {
+				$_SESSION["migrate_job"] = $json["first_job"];
+			}
+			if (!empty($json["batch_id"])) {
+				$_SESSION["migrate_batch_id"] = $json["batch_id"];
+			}
 			$_SESSION["migrate_batch_users"] = $users;
 		}
+		echo $json ? json_encode($json) : json_encode(["ok" => false, "error" => $raw, "code" => $rc]);
+		break;
+
+	case "batch_status":
+		$batch = trim($_GET["batch"] ?? $_POST["batch"] ?? ($_SESSION["migrate_batch_id"] ?? ""));
+		$cmd = "$bin /usr/local/hestia/bin/v-migrate-batch-status";
+		if ($batch !== "" && preg_match('/^[A-Za-z0-9._-]+$/', $batch)) {
+			$cmd .= " " . escapeshellarg($batch);
+		}
+		[$rc, $raw, $json] = migrate_exec($cmd);
 		echo $json ? json_encode($json) : json_encode(["ok" => false, "error" => $raw, "code" => $rc]);
 		break;
 

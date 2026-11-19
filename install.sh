@@ -85,6 +85,8 @@ CMDS=(
 	v-migrate-transfer
 	v-migrate-start
 	v-migrate-start-batch
+	v-migrate-batch-status
+	v-migrate-prep-php
 	v-migrate-status
 	v-migrate-verify
 	v-migrate-inspect-job
@@ -139,8 +141,8 @@ fi
 } >>"$HOOK"
 chmod +x "$HOOK"
 
-# Apply menu + Plugins patches now
-"$DEST/hooks/post_install.sh"
+# Apply menu + Plugins patches now (enable User Import by default on install/upgrade)
+HESTIA_MIGRATE_ENABLE_DEFAULT=1 "$DEST/hooks/post_install.sh"
 
 echo "$VERSION" >"$DEST/.installed_version"
 echo "==> hestia-migrate $VERSION installed"
