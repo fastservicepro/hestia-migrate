@@ -30,13 +30,32 @@ fi
 [[ -n "$password" ]] || die_json 2 "empty password"
 [[ -n "$ssh_user" ]] || die_json 2 "SSH user required"
 
-session=$(date +%Y%m%d%H%M%S)-$(head -c 4 /dev/urandom | xxd -p)
+rand_hex() {
+	if command -v xxd >/dev/null 2>&1; then
+		head -c 4 /dev/urandom | xxd -p
+	elif command -v hexdump >/dev/null 2>&1; then
+		head -c 4 /dev/urandom | hexdump -ve '/1 "%02x"'
+	else
+		head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n'
+	fi
+}
+session=$(date +%Y%m%d%H%M%S)-$(rand_hex)
 sdir=$(session_dir "$session")
 mkdir -p "$sdir"
 chmod 700 "$sdir"
 echo "$host" >"$sdir/host"
 echo "$port" >"$sdir/port"
 echo "$ssh_user" >"$sdir/ssh_user"
+
+# sshpass is mandatory for reliable password → temporary key bootstrap
+if ! command -v sshpass >/dev/null 2>&1; then
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sshpass >/dev/null 2>&1 || true
+	fi
+fi
+if ! command -v sshpass >/dev/null 2>&1; then
+	die_json 3 "sshpass is required on this destination server. Run: apt-get install -y sshpass"
+fi
 
 key="$sdir/id_ed25519"
 ssh-keygen -t ed25519 -N "" -f "$key" -C "hestia-migrate-$session" >/dev/null
@@ -90,23 +109,40 @@ EOS
 fi
 shred -u "$pwfile" 2>/dev/null || rm -f "$pwfile"
 
-[[ "$ok" -eq 1 ]] || die_json 3 "SSH authentication failed (apt install sshpass recommended)"
+if [[ "$ok" -ne 1 ]]; then
+	if ! command -v sshpass >/dev/null 2>&1; then
+		die_json 3 "SSH authentication failed. On THIS server (destination) run: apt-get install -y sshpass"
+	fi
+	die_json 3 "SSH authentication failed. Check source host/IP, port, login and password."
+fi
+
+# Confirm key login before running probe (clearer errors than "remote probe failed")
+key_err="$sdir/keylogin.err"
+if ! ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 \
+	-o StrictHostKeyChecking=accept-new -p "$port" "${ssh_user}@${host}" \
+	'echo KEY_OK' >/dev/null 2>"$key_err"; then
+	err=$(tr '\n' ' ' <"$key_err" 2>/dev/null | head -c 200)
+	die_json 3 "SSH key login to source failed after password step${err:+: $err}"
+fi
 
 # Probe as this user; non-root needs passwordless sudo for hestia paths
 probe_wrap='bash -s'
 if [[ "$ssh_user" != "root" ]]; then
-	# verify sudo works without password
 	ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 \
 		-o StrictHostKeyChecking=accept-new -p "$port" "${ssh_user}@${host}" \
 		'sudo -n true' >/dev/null 2>&1 || die_json 3 "SSH user needs passwordless sudo (or use root)"
 	probe_wrap='sudo -n bash -s'
 fi
 
+probe_err="$sdir/probe.err"
 remote_info=$(ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 \
 	-o StrictHostKeyChecking=accept-new -p "$port" "${ssh_user}@${host}" \
-	$probe_wrap <"$MIGRATE_ROOT/share/remote-sys-probe.sh") || die_json 3 "remote probe failed"
+	$probe_wrap <"$MIGRATE_ROOT/share/remote-sys-probe.sh" 2>"$probe_err") || {
+	err=$(tr '\n' ' ' <"$probe_err" 2>/dev/null | head -c 300)
+	die_json 3 "remote probe failed${err:+: $err}"
+}
 
-echo "$remote_info" | grep -q '"hestia_ver"' || die_json 4 "remote host is not HestiaCP"
+echo "$remote_info" | grep -q '"hestia_ver"' || die_json 4 "remote host is not HestiaCP (probe returned: $(echo "$remote_info" | tr '\n' ' ' | head -c 200))"
 
 date -Is >"$sdir/created"
 echo "$remote_info" >"$sdir/remote.json"

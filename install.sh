@@ -18,6 +18,45 @@ VERSION=$(cat "$SRC/VERSION" 2>/dev/null || echo "1.0.0")
 
 echo "==> Installing hestia-migrate $VERSION to $DEST"
 
+# ---------------------------------------------------------------------------
+# Critical OS packages (destination server)
+# sshpass is REQUIRED: without it, password→temporary-key bootstrap is unreliable
+# and Connect often ends as "remote probe failed" / auth errors.
+# ---------------------------------------------------------------------------
+NEED_PKGS=(
+	openssh-client
+	sshpass
+	python3
+	rsync
+	curl
+	ca-certificates
+	xxd
+)
+echo "==> Ensuring required packages: ${NEED_PKGS[*]}"
+export DEBIAN_FRONTEND=noninteractive
+if command -v apt-get >/dev/null 2>&1; then
+	apt-get update -qq >/dev/null 2>&1 || true
+	apt-get install -y -qq "${NEED_PKGS[@]}" >/dev/null
+else
+	echo "ERROR: apt-get not found; install manually: ${NEED_PKGS[*]}" >&2
+	exit 1
+fi
+
+missing=0
+for bin in ssh ssh-keygen sshpass python3 rsync; do
+	if ! command -v "$bin" >/dev/null 2>&1; then
+		echo "ERROR: required command not found after install: $bin" >&2
+		missing=1
+	fi
+done
+# xxd comes from package xxd (or vim-common on older Debian)
+if ! command -v xxd >/dev/null 2>&1 && ! command -v hexdump >/dev/null 2>&1 && ! command -v od >/dev/null 2>&1; then
+	echo "ERROR: need xxd, hexdump, or od for session ids" >&2
+	missing=1
+fi
+[[ "$missing" -eq 0 ]] || exit 1
+echo "    packages OK (sshpass=$(command -v sshpass))"
+
 mkdir -p "$DEST" /usr/local/hestia/data/hestia-migrate /var/log/hestia-migrate
 if command -v rsync >/dev/null 2>&1; then
 	rsync -a --delete \
@@ -37,10 +76,6 @@ find "$DEST/bin" -type f -exec chmod 755 {} \;
 find "$DEST/lib" -type f -exec chmod 644 {} \;
 find "$DEST/share" -type f -exec chmod 755 {} \;
 chmod 755 "$DEST/hooks/"*.sh "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
-# Recommend sshpass for password bootstrap
-if ! command -v sshpass >/dev/null 2>&1; then
-	echo "NOTE: install sshpass for reliable SSH password auth: apt-get install -y sshpass"
-fi
 
 # CLI wrappers in Hestia bin
 CMDS=(
@@ -109,3 +144,4 @@ chmod +x "$HOOK"
 echo "$VERSION" >"$DEST/.installed_version"
 echo "==> hestia-migrate $VERSION installed"
 echo "    Users → Import user   ·  /migrate/   ·  Settings → Configure → Plugins → User Import"
+echo "    Required: sshpass + openssh-client + python3 (installed above)"

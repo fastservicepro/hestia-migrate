@@ -40,13 +40,15 @@
 				<i class="fas fa-people-arrows icon-purple"></i>
 				<?= _("Import user from another Hestia server") ?>
 			</h1>
-			<p class="u-mb20"><?= _("Connect over SSH. Password is used once and not stored. A temporary key is created for the session and wiped when you disconnect or after import finishes.") ?></p>
+			<p class="u-mb20"><?= _("Connect over SSH to the SOURCE Hestia server (the old one). Password is used once and not stored. A temporary key is created for the session and wiped when you disconnect or after import finishes.") ?></p>
+			<p class="u-mb20 u-text-small"><?= _("On this destination server, sshpass is recommended:") ?> <code>apt-get install -y sshpass</code></p>
 			<form id="hmig-connect-form" class="form">
 				<div class="form-group">
 					<label class="form-label" for="hmig-host">
-						<i class="fas fa-network-wired icon-blue"></i> <?= _("Hostname or IP") ?>
+						<i class="fas fa-network-wired icon-blue"></i> <?= _("Source hostname or IP") ?>
 					</label>
 					<input class="form-control" type="text" id="hmig-host" name="host" required placeholder="source.example.com" autocomplete="off">
+					<span class="hint"><?= _("Not this server — the remote Hestia you import FROM") ?></span>
 				</div>
 				<div class="form-group">
 					<label class="form-label" for="hmig-port">

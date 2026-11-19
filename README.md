@@ -3,7 +3,7 @@
 
 **User import module for [Hestia Control Panel](https://hestiacp.com/)** — migrate accounts from one Hestia server to another without manual backup / scp / restore in a terminal.
 
-Latest release: **Version 1.2.2**
+Latest release: **Version 1.2.3**
 
 Please go easy on this project — this is my first publicly shared code. I built it for myself because backing up and moving Hestia users only through the terminal was painfully inconvenient. The module is meant simply to make transferring users between your own Hestia servers easier. If it’s useful to anyone else, I’m glad. Contributions and improvements are very welcome.
 
@@ -31,8 +31,8 @@ Temporary SSH keys are wiped after import or when you disconnect. Job history ca
 
 - Hestia Control Panel already installed
 - Debian 12 / 13 or Ubuntu 22.04 / 24.04 / 26.04
-- `python3`, `ssh`, `git` (installer can pull `sshpass` / `rsync` if missing)
 - Root access
+- Packages installed automatically by `install.sh`: `openssh-client`, **`sshpass`** (required), `python3`, `rsync`, `curl`, `ca-certificates`, `xxd`
 
 ### Source server (the old panel you import from)
 
@@ -89,19 +89,13 @@ bash install.sh
 
 ```bash
 cd /usr/local/src
-wget https://github.com/fastservicepro/hestia-migrate/releases/latest/download/hestia-migrate-1.2.2.zip
-unzip hestia-migrate-1.2.2.zip -d hestia-migrate
+wget https://github.com/fastservicepro/hestia-migrate/releases/latest/download/hestia-migrate-1.2.3.zip
+unzip hestia-migrate-1.2.3.zip -d hestia-migrate
 cd hestia-migrate
 bash install.sh
 ```
 
-### Optional dependency
-
-```bash
-apt-get install -y sshpass
-```
-
-`sshpass` makes the first SSH password login more reliable. Without it the module still tries an askpass fallback.
+`install.sh` / `install-remote.sh` install **`sshpass` and the other required packages** automatically. Without `sshpass`, Connect cannot reliably push a temporary SSH key to the source server.
 
 ---
 

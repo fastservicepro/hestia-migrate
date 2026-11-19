@@ -4,8 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/install-remote.sh | bash
 #
 # Optional:
-#   bash install-remote.sh --ref v1.2.2
-#   HESTIA_MIGRATE_REF=v1.2.2 bash install-remote.sh
+#   bash install-remote.sh --ref v1.2.3
 set -euo pipefail
 
 if [[ $(id -u) -ne 0 ]]; then
@@ -40,7 +39,16 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1 || true
-apt-get install -y -qq git sshpass python3 rsync ca-certificates curl >/dev/null || true
+# Pull deps before clone so install.sh verification is a no-op / fast
+apt-get install -y -qq \
+	git \
+	openssh-client \
+	sshpass \
+	python3 \
+	rsync \
+	ca-certificates \
+	curl \
+	xxd >/dev/null
 
 mkdir -p "$(dirname "$SRC_DIR")"
 if [[ -d "$SRC_DIR/.git" ]]; then
