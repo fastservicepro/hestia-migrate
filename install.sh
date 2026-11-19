@@ -62,6 +62,12 @@ if command -v rsync >/dev/null 2>&1; then
 	rsync -a --delete \
 		--exclude '.git' \
 		--exclude 'dist' \
+		--exclude '.cursor' \
+		--exclude '.idea' \
+		--exclude '.vscode' \
+		--exclude '.agent' \
+		--exclude 'agent-transcripts' \
+		--exclude '*.plan.md' \
 		"$SRC/" "$DEST/"
 else
 	find "$DEST" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +

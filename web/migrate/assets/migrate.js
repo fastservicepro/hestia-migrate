@@ -578,7 +578,7 @@
 			const map = await api("jobs_for_users", { users }, "GET");
 			if (map && map.ok === false) {
 				$("#hmig-progress-msg").textContent =
-					map.error || "Cannot read job status (sudo / jobs-for-users). Reinstall hestia-migrate 1.2.6+.";
+					map.error || "Cannot read job status (sudo / jobs-for-users). Re-run install.sh or install-remote.sh.";
 				$("#hmig-progress-log").textContent = JSON.stringify(map, null, 2);
 			}
 			batchJobs = map.jobs || {};

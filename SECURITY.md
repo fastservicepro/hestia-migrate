@@ -2,7 +2,12 @@
 
 ## Supported versions
 
-Please report issues against the latest release on the `main` branch.
+| Version | Supported |
+|---------|-----------|
+| 1.3.x   | Yes       |
+| older than 1.3 | No   |
+
+Please report issues against the latest release on `main` ([Releases](https://github.com/fastservicepro/hestia-migrate/releases)).
 
 ## Reporting a vulnerability
 

@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/fastservicepro/hestia-migrate/main/install-remote.sh | bash
 #
 # Optional:
-#   bash install-remote.sh --ref v1.2.3
+#   bash install-remote.sh --ref v1.3.0
 set -euo pipefail
 
 if [[ $(id -u) -ne 0 ]]; then

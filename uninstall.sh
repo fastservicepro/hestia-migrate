@@ -28,11 +28,14 @@ for cmd in \
 	v-migrate-transfer \
 	v-migrate-start \
 	v-migrate-start-batch \
+	v-migrate-batch-status \
+	v-migrate-prep-php \
 	v-migrate-status \
 	v-migrate-verify \
 	v-migrate-inspect-job \
 	v-migrate-repair \
 	v-migrate-list-jobs \
+	v-migrate-jobs-for-users \
 	v-migrate-wipe-session \
 	v-migrate-delete-job
 do
