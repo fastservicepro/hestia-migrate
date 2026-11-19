@@ -52,9 +52,15 @@ apt-get install -y -qq \
 
 mkdir -p "$(dirname "$SRC_DIR")"
 if [[ -d "$SRC_DIR/.git" ]]; then
-	git -C "$SRC_DIR" fetch --tags --prune
+	# --force on tags: survive rewritten release tags after force-pushed main
+	git -C "$SRC_DIR" fetch origin --prune
+	git -C "$SRC_DIR" fetch --tags --force
 	git -C "$SRC_DIR" checkout "$REF"
-	git -C "$SRC_DIR" pull --ff-only origin "$REF" 2>/dev/null || true
+	if git -C "$SRC_DIR" rev-parse --verify "origin/$REF" >/dev/null 2>&1; then
+		git -C "$SRC_DIR" reset --hard "origin/$REF"
+	else
+		git -C "$SRC_DIR" reset --hard "$REF"
+	fi
 else
 	rm -rf "$SRC_DIR"
 	git clone --branch "$REF" --depth 1 "$REPO_URL" "$SRC_DIR"
